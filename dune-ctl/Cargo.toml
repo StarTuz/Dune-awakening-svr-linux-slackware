@@ -1,0 +1,17 @@
+[workspace]
+members = ["core", "ctl"]
+resolver = "2"
+
+[workspace.dependencies]
+anyhow    = "1"
+serde     = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio     = { version = "1", features = ["full"] }
+chrono    = { version = "0.4", features = ["serde"] }
+base64    = "0.22"
+clap      = { version = "4", features = ["derive"] }
+ratatui   = "0.29"
+crossterm = "0.28"
+axum      = "0.7"
+tower     = "0.5"
+tower-http = { version = "0.6", features = ["fs"] }
