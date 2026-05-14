@@ -149,7 +149,7 @@ All items applied. Details in CLAUDE.md § Security.
 | PostgreSQL passwords rotated | ✅ ALTER USER applied; CR + on-disk YAML updated |
 | k3s API `bind-address: 127.0.0.1` | ❌ REVERTED — breaks pod→API DNAT; firewall is sufficient |
 | SNMP disabled | ✅ off |
-| FLS token expiry tracking | ⏳ planned for dune-ctl; token expires 2026-09-05, rotate by 2026-08-20 |
+| FLS token expiry tracking | ✅ in dune-ctl (`token-check`); token expires 2027-05-08, rotate by 2027-04-08 |
 
 ## What still needs doing
 
@@ -161,7 +161,7 @@ All items applied. Details in CLAUDE.md § Security.
 - [ ] Set up backup jobs writing to `/srv/backups/dune/` and `/srv/backups/conan/`
 - [ ] Off-server backup strategy (rsync to NAS / rclone to cloud — TBD)
 - [ ] Create `settings.conf` (`printf '\n\n\n47.145.51.160\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
-- [ ] **Rotate FLS token before 2026-08-20** (expires 2026-09-05) — update BattleGroup CR args (28 occurrences) + re-apply gateway patch
+- [ ] **Rotate FLS token before 2027-04-08** (expires 2027-05-08) — update BattleGroup CR args (28 occurrences) + re-apply gateway patch
 - [ ] Build dune-ctl (Rust TUI + web) — FLS token expiry warning is planned feature
 
 ## Bootstrapping fixes applied (fresh cluster workarounds)

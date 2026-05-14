@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Operations repository for a Dune: Awakening self-hosted battlegroup running natively on Slackware Linux, co-hosted with an existing Conan Exiles Enhanced server. `README.md` is an early research snapshot; `STATUS.md` is the current authoritative state.
 
-**Current state**: Fully running as of 2026-05-13; security hardening applied 2026-05-14. Survival_1, Overmap, and DeepDesert_1 are all up. Total game server RSS ~4.4 Gi — fits in available RAM with no meaningful swap pressure. Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB (zram + dune-vg SSD + sdc1) available as headroom. VPA recommender live (Off mode, memory only). Motherboard replacement to 64 GB pending. FLS token expires 2026-09-05 — rotate by 2026-08-20.
+**Current state**: Fully running as of 2026-05-13; security hardening applied 2026-05-14. Survival_1, Overmap, and DeepDesert_1 are all up. Total game server RSS ~4.4 Gi — fits in available RAM with no meaningful swap pressure. Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB (zram + dune-vg SSD + sdc1) available as headroom. VPA recommender live (Off mode, memory only). Motherboard replacement to 64 GB pending. FLS token expires 2027-05-08 — rotate by 2027-04-08.
 
 ---
 
@@ -203,9 +203,15 @@ Only `startux` and `dune` have authorized keys. Keys are RSA-4096 (defiant's Ope
 
 ### FLS JWT token
 
-The FLS JWT is embedded in the BattleGroup CR args — it appears 28 times (once per map set entry). **It expires 2026-09-05. Rotate by 2026-08-20.**
+The FLS JWT is in each BattleGroup CR set's `arguments` array, in the form:
+```
+-ini:engine:[FuncomLiveServices]:ServiceAuthToken=<jwt>
+```
+It appears 28 times (once per map set). **Current token expires 2027-05-08. Rotate by 2027-04-08.**
 
-When rotating: get a new token from the Funcom portal, patch all 28 occurrences in the BattleGroup CR, then run `gateway-patch.sh`. This is planned as a dune-ctl feature (expiry warning + guided rotation).
+Check expiry at any time: `~/dune-server/dune-ctl/target/release/dune-ctl token-check`
+
+When rotating: get a new token from the Funcom portal, patch all 28 occurrences in the BattleGroup CR, then run `gateway-patch.sh`. Tracked in dune-ctl (`token-check` exits 2 when ≤14 days remain).
 
 ### Operator recovery after stuck state
 

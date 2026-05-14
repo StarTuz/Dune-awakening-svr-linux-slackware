@@ -78,25 +78,21 @@ pub async fn check(cfg: &Config) -> Result<FlsTokenStatus> {
     decode(&token)
 }
 
-/// Find the FLS JWT in the BattleGroup CR's set args.
-/// Tries common arg prefix forms; falls back to recognising raw JWTs (start with eyJ).
+/// Find the FLS JWT in the BattleGroup CR's set arguments.
+/// Actual format: -ini:engine:[FuncomLiveServices]:ServiceAuthToken=<jwt>
 fn extract_jwt(bg: &serde_json::Value) -> Option<String> {
     let sets = bg
         .pointer("/spec/serverGroup/template/spec/sets")?
         .as_array()?;
     for set in sets {
-        let args = set.get("args")?.as_array()?;
+        let args = set.get("arguments")?.as_array()?;
         for arg in args {
             let s = arg.as_str()?;
             if let Some(token) = s
-                .strip_prefix("-FLSAuthToken=")
-                .or_else(|| s.strip_prefix("--FLSAuthToken="))
+                .strip_prefix("-ini:engine:[FuncomLiveServices]:ServiceAuthToken=")
+                .or_else(|| s.strip_prefix("-FLSAuthToken="))
             {
                 return Some(token.to_string());
-            }
-            // Raw JWT (base64url header always starts with eyJ)
-            if s.starts_with("eyJ") && s.contains('.') {
-                return Some(s.to_string());
             }
         }
     }
@@ -138,6 +134,7 @@ mod tests {
 
     #[test]
     fn extract_jwt_from_arg_prefix() {
+        // Matches the actual BattleGroup CR argument format
         let bg = serde_json::json!({
             "spec": {
                 "serverGroup": {
@@ -145,7 +142,10 @@ mod tests {
                         "spec": {
                             "sets": [{
                                 "map": "Survival_1",
-                                "args": ["-FLSAuthToken=eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjE3ODg2NTI4MDB9.sig"]
+                                "arguments": [
+                                    "-FarmRegion=North America Test",
+                                    "-ini:engine:[FuncomLiveServices]:ServiceAuthToken=eyJhbGciOiJIUzI1NiJ9.eyJleHAiOjE3ODg2NTI4MDB9.sig"
+                                ]
                             }]
                         }
                     }
