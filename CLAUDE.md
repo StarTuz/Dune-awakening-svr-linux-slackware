@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Operations repository for a Dune: Awakening self-hosted battlegroup running natively on Slackware Linux, co-hosted with an existing Conan Exiles Enhanced server. `README.md` is an early research snapshot; `STATUS.md` is the current authoritative state.
 
-**Current state**: Fully running as of 2026-05-13. Both Survival_1 and Overmap are up. Overmap is swap-backed (200 Mi request / 1 Gi limit) via `experimental_swap.sh`. Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB (zram + dune-vg SSD + sdc1). VPA recommender is live (Off mode, memory only) tracking 9 standard workloads. Motherboard replacement to 64 GB pending — once done, Overmap can run at full allocation without swap.
+**Current state**: Fully running as of 2026-05-13. Survival_1, Overmap, and DeepDesert_1 are all up. Total game server RSS ~4.4 Gi — fits in available RAM with no meaningful swap pressure. Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB (zram + dune-vg SSD + sdc1) available as headroom. VPA recommender live (Off mode, memory only). Motherboard replacement to 64 GB pending.
 
 ---
 
@@ -57,13 +57,35 @@ Funcom ships everything as offline OCI image tarballs — no internet required a
 |---|---|
 | `battlegroup-operator` | `BattleGroup` CRs |
 | `database-operator` | Postgres StatefulSets |
-| `server-operator` | Game server pods |
+| `server-operator` | `ServerGroup` and `ServerSet` CRs |
 | `utilities-operator` | Supporting services (filebrowser, etc.) |
 
 Each battlegroup gets its own namespace `funcom-seabass-<name>`. Inside: postgres, rabbitmq, gateway, director, text-router, filebrowser, and the game server pods.
 
 **Current battlegroup**: `sh-db3533a2d5a25fb-xyyxbx` ("Slackware-Arrakis")
 **Namespace**: `funcom-seabass-sh-db3533a2d5a25fb-xyyxbx`
+
+### Server operator chain (critical — read before touching maps)
+
+Starting or stopping a map involves a four-level ownership chain. Each level is reconciled by the server-operator:
+
+```
+BattleGroup CR
+  spec.serverGroup.template.spec.sets[n].replicas
+    ↓ battlegroup-operator propagates
+  ServerGroup
+    spec.sets[n].replicas
+      ↓ server-operator propagates
+      ServerSet
+        spec.replicas
+          ↓ serverset controller creates/owns
+          ServerSetScale        ← final pod-creation trigger
+            spec.replicas
+              ↓
+              Pod
+```
+
+**The catch**: the `ServerSetScale` does **not** auto-update when the levels above it are patched. Patching only the BattleGroup CR (or ServerSet) leaves the ServerSet in `Stopped` phase indefinitely — `spec.replicas=1` is set but `ServerSetScale.spec.replicas` stays 0 and no pod is created. Always use `map-toggle.sh`, which patches both the BattleGroup CR and the ServerSetScale in one step.
 
 ### Windows vs our deployment
 
@@ -94,7 +116,7 @@ Funcom's Windows depot (3104831) ships a pre-built Hyper-V VM (`.vhdx` + `.vmcx`
 |---|---|
 | `root-setup.sh` | Run once as root: installs k3s, creates shims, writes rc.k3s, sets sudoers, sets up LVM swap + backup volume |
 | `memory-focused-scheduler.sh` | Custom Kubernetes scheduler daemon — binds pending pods to the single k3s node. Auto-starts via rc.local |
-| `map-toggle.sh` | Start/stop individual maps. Usage: `map-toggle.sh list`, `map-toggle.sh start DeepDesert_1` |
+| `map-toggle.sh` | Start/stop individual maps; handles the full BattleGroup CR + ServerSetScale chain |
 | `sudoer.sh` | One-liner fallback to patch sudoers + restart k3s (emergency use) |
 | `vpa/install.sh` | Install VPA recommender: downloads CRDs, applies RBAC + deployment, runs vpa-objects.sh |
 | `vpa/recommender-rbac.yaml` | ServiceAccount + ClusterRoles + bindings for vpa-recommender in kube-system |
@@ -163,6 +185,7 @@ The Windows wizard writes the external IP to `/home/dune/.dune/settings.conf` be
 | Scheduler daemon | `~/dune-server/scripts/memory-focused-scheduler.sh` |
 | Scheduler log | `~/dune-server/logs/memory-focused-scheduler.log` |
 | k3s log | `~/dune-server/logs/k3s.log` |
+| Map toggle | `~/dune-server/scripts/map-toggle.sh` |
 | Backup volumes | `/srv/backups/{dune,conan}/` |
 | VPA scripts | `~/dune-server/scripts/vpa/` |
 | Windows package | `~/steamcmd/dune_server/` (depot 3104831) |
@@ -180,6 +203,11 @@ The Windows wizard writes the external IP to `/home/dune/.dune/settings.conf` be
 ~/dune-server/server/scripts/battlegroup.sh logs-export
 ~/dune-server/server/scripts/battlegroup.sh operator-logs-export
 ~/dune-server/server/scripts/battlegroup.sh apply-default-usersettings
+
+# Individual map control
+~/dune-server/scripts/map-toggle.sh list                        # all maps + live phases
+~/dune-server/scripts/map-toggle.sh start DeepDesert_1
+~/dune-server/scripts/map-toggle.sh stop  DeepDesert_1
 
 # Cluster state
 sudo kubectl get nodes
@@ -215,6 +243,31 @@ Then manually (or add to rc.local for fully automatic):
 sudo rc-service k3s start
 ```
 
+After k3s is up, maps that were running before the reboot do **not** restart automatically — the BattleGroup CR retains the last replica counts, but the ServerSetScale objects reset to 0. Use `map-toggle.sh start <map>` for each map, or restart the whole battlegroup:
+```sh
+~/dune-server/server/scripts/battlegroup.sh restart
+```
+
+---
+
+## Map Inventory
+
+All 28 maps defined in the BattleGroup CR. Observed RSS values from 2026-05-13 (single user, idle/light load):
+
+| Map | Limit | Request | Observed RSS | Notes |
+|---|---|---|---|---|
+| `Survival_1` | 12 Gi | 5 Gi | ~3.3 Gi | Main world — always on |
+| `DeepDesert_1` | 10 Gi | 3 Gi | ~954 Mi | Running; fits in RAM at this usage |
+| `Overmap` | 1 Gi | 200 Mi | ~165 Mi | Running; swap-backed by request |
+| `SH_Arrakeen` | 1 Gi | 200 Mi | — | Stopped |
+| `SH_HarkoVillage` | 1 Gi | 200 Mi | — | Stopped |
+| Story / CB / DLC maps (23 others) | 1–6 Gi | 200 Mi | — | All stopped |
+
+`map-toggle.sh list` shows current on/off state. To start any stopped map:
+```sh
+~/dune-server/scripts/map-toggle.sh start <MapName>
+```
+
 ---
 
 ## Memory Requirements
@@ -228,15 +281,19 @@ Official Funcom tiers (from `initial-setup.ps1`):
 | 30 GB | Hagga Basin + Story/Social maps |
 | 40 GB | Hagga Basin + Story/Social + Deep Desert (full) |
 
-Per-map Kubernetes limits (from `experimental_swap.sh`):
+Funcom's tiers assume full player load. In practice with a single user:
+- Survival_1 + DeepDesert_1 + Overmap together used ~4.4 Gi RSS — well within the ~6.5 Gi free after Conan on 16 GB RAM.
+- Experimental swap lowers *requests* so Kubernetes schedules pods against available RAM + swap headroom. The gap between request and actual RSS is wide for all maps so far.
+
+Per-map Kubernetes limits and requests (from `experimental_swap.sh`):
 
 | Map | Limit | Request (swap mode) |
 |---|---|---|
 | `Survival_1` | 12 Gi | 5 Gi |
 | `DeepDesert_1` | 10 Gi | 3 Gi |
-| `Overmap`, all Story/Social maps | 1 Gi | 200 Mi |
+| `Overmap`, all Story/Social/CB/DLC maps | 1 Gi | 200 Mi |
 
-Experimental swap lowers *requests* so Kubernetes will schedule pods even when free RAM is tight, using swap to back the gap between request and limit. Enable with:
+Enable or re-run experimental swap with:
 ```sh
 ~/dune-server/server/scripts/setup/experimental_swap.sh
 ```
@@ -251,7 +308,7 @@ VPA 1.6.0 runs in **recommender-only / Off mode**: it collects metrics and write
 
 VPA watches standard Kubernetes controllers (Deployments, StatefulSets). In the battlegroup namespace these are the infra workloads: postgres, rabbitmq, gateway, director, text-router, filebrowser, db-util-mon, db-util-pghero.
 
-Funcom's game server pods (Survival_1, Overmap) are owned by the **ServerSet** custom resource — not a standard controller. VPA cannot target them via `scaleTargetRef`. Use `watch-gameservers.sh` instead.
+Funcom's game server pods are owned by the **ServerSet** custom resource — not a standard controller. VPA cannot target them via `scaleTargetRef`. Use `watch-gameservers.sh` instead.
 
 ### Deployed resources
 
@@ -279,7 +336,7 @@ sudo kubectl describe vpa vpa-sh-db3533a2d5a25fb-xyyxbx-db-dbdepl-sts \
 ### Monitoring game server memory
 
 ```sh
-# One-shot check (Survival_1 and Overmap usage vs request/limit)
+# One-shot check (all game server pods — usage vs request/limit)
 ~/dune-server/scripts/vpa/watch-gameservers.sh --once
 
 # Continuous (default 120s interval, logs RECOMMEND when usage > request + 20%)
@@ -289,20 +346,6 @@ sudo kubectl describe vpa vpa-sh-db3533a2d5a25fb-xyyxbx-db-dbdepl-sts \
 ~/dune-server/scripts/vpa/watch-gameservers.sh --interval 300 --threshold 30
 ```
 
-### Starting and stopping individual maps
-
-Use `map-toggle.sh` — do not patch the ServerSet directly.
-
-```sh
-~/dune-server/scripts/map-toggle.sh list
-~/dune-server/scripts/map-toggle.sh start DeepDesert_1
-~/dune-server/scripts/map-toggle.sh stop  DeepDesert_1
-```
-
-**Why the script exists:** Starting a map requires patching two objects. The BattleGroup operator propagates `BattleGroup CR → ServerGroup → ServerSet` correctly, but the `ServerSetScale` (the final pod-creation trigger, owned by the ServerSet) does **not** auto-update. Without patching ServerSetScale, the ServerSet stays in `Stopped` phase indefinitely even though its `spec.replicas` is 1. `map-toggle.sh` patches both in one command.
-
-The full chain: `BattleGroup CR sets[n].replicas` → `ServerGroup sets[n].replicas` → `ServerSet spec.replicas` → **`ServerSetScale spec.replicas`** → pod created.
-
 ### Adjusting game server memory
 
 Tuning is done via `experimental_swap.sh`'s `map_to_requests` map or a direct BattleGroup CR patch:
@@ -311,10 +354,17 @@ Tuning is done via `experimental_swap.sh`'s `map_to_requests` map or a direct Ba
 # Re-run the script after editing map_to_requests in experimental_swap.sh
 ~/dune-server/server/scripts/setup/experimental_swap.sh
 
-# Or patch directly (index from `kubectl get battlegroups ... -o json | jq ...`)
-sudo kubectl patch battlegroup -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx \
-  sh-db3533a2d5a25fb-xyyxbx --type='json' \
-  -p='[{"op":"replace","path":"/spec/serverGroup/template/spec/sets/0/resources","value":{"limits":{"memory":"12Gi"},"requests":{"memory":"5Gi"}}}]'
+# Or patch directly — get the set index first:
+sudo kubectl get battlegroups sh-db3533a2d5a25fb-xyyxbx \
+  -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx -o json \
+  | jq -r '.spec.serverGroup.template.spec.sets | to_entries[]
+           | "\(.key): \(.value.map) (replicas=\(.value.replicas))"'
+
+# Then patch by index (example: index 0 = Survival_1)
+sudo kubectl patch battlegroup sh-db3533a2d5a25fb-xyyxbx \
+  -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx --type='json' \
+  -p='[{"op":"replace","path":"/spec/serverGroup/template/spec/sets/0/resources",
+        "value":{"limits":{"memory":"12Gi"},"requests":{"memory":"5Gi"}}}]'
 ```
 
 ### Re-installing or upgrading VPA
