@@ -8,6 +8,7 @@ Last updated: 2026-05-13, fully running — Survival_1 and Overmap up, VPA recom
 |---|---|---|
 | kube-system | coredns, local-path-provisioner, metrics-server, traefik | Running |
 | kube-system | vpa-recommender (Off mode, memory only) | Running |
+| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | DeepDesert_1 game server | Running (954Mi actual, 3Gi req / 10Gi limit) |
 | cert-manager | cert-manager, cainjector, webhook | Running |
 | funcom-operators | battlegroupoperator, databaseoperator, serveroperator, utilitiesoperator | Running |
 | funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | postgres, rabbitmq, gateway, director, text-router, filebrowser | Running |
@@ -45,7 +46,9 @@ sudo kubectl describe vpa <name> -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
 ~/dune-server/scripts/vpa/watch-gameservers.sh --once
 ```
 
-First readings (2026-05-13): Survival_1 3729Mi/12Gi (30% of limit), Overmap 109Mi/1Gi (10%).
+Readings (2026-05-13): Survival_1 3313Mi/12Gi (28%), Overmap 165Mi/1Gi (17%), DeepDesert_1 954Mi/10Gi (10%).
+
+Total game server RSS ~4.4Gi — fits comfortably in available RAM alongside Conan (~9.5GB). No meaningful swap pressure observed with all three running.
 
 To tune game server memory: edit `experimental_swap.sh` map_to_requests and re-run, or patch the BattleGroup CR directly (see CLAUDE.md VPA section for the patch command).
 
@@ -104,4 +107,5 @@ rc.local starts (in order):
 | Dune backups | `/srv/backups/dune/` |
 | Conan backups | `/srv/backups/conan/` |
 | VPA scripts | `~/dune-server/scripts/vpa/` |
+| Map toggle | `~/dune-server/scripts/map-toggle.sh` |
 | Windows reference | `~/steamcmd/dune_server/` |

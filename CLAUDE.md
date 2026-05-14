@@ -94,6 +94,7 @@ Funcom's Windows depot (3104831) ships a pre-built Hyper-V VM (`.vhdx` + `.vmcx`
 |---|---|
 | `root-setup.sh` | Run once as root: installs k3s, creates shims, writes rc.k3s, sets sudoers, sets up LVM swap + backup volume |
 | `memory-focused-scheduler.sh` | Custom Kubernetes scheduler daemon — binds pending pods to the single k3s node. Auto-starts via rc.local |
+| `map-toggle.sh` | Start/stop individual maps. Usage: `map-toggle.sh list`, `map-toggle.sh start DeepDesert_1` |
 | `sudoer.sh` | One-liner fallback to patch sudoers + restart k3s (emergency use) |
 | `vpa/install.sh` | Install VPA recommender: downloads CRDs, applies RBAC + deployment, runs vpa-objects.sh |
 | `vpa/recommender-rbac.yaml` | ServiceAccount + ClusterRoles + bindings for vpa-recommender in kube-system |
@@ -287,6 +288,20 @@ sudo kubectl describe vpa vpa-sh-db3533a2d5a25fb-xyyxbx-db-dbdepl-sts \
 # Tune interval or threshold
 ~/dune-server/scripts/vpa/watch-gameservers.sh --interval 300 --threshold 30
 ```
+
+### Starting and stopping individual maps
+
+Use `map-toggle.sh` — do not patch the ServerSet directly.
+
+```sh
+~/dune-server/scripts/map-toggle.sh list
+~/dune-server/scripts/map-toggle.sh start DeepDesert_1
+~/dune-server/scripts/map-toggle.sh stop  DeepDesert_1
+```
+
+**Why the script exists:** Starting a map requires patching two objects. The BattleGroup operator propagates `BattleGroup CR → ServerGroup → ServerSet` correctly, but the `ServerSetScale` (the final pod-creation trigger, owned by the ServerSet) does **not** auto-update. Without patching ServerSetScale, the ServerSet stays in `Stopped` phase indefinitely even though its `spec.replicas` is 1. `map-toggle.sh` patches both in one command.
+
+The full chain: `BattleGroup CR sets[n].replicas` → `ServerGroup sets[n].replicas` → `ServerSet spec.replicas` → **`ServerSetScale spec.replicas`** → pod created.
 
 ### Adjusting game server memory
 
