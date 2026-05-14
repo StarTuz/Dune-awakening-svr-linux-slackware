@@ -276,6 +276,23 @@ chown conan:users "$BACKUPS_MOUNT/conan"
 ok "backup dir ownership set"
 
 echo ""
+echo "=== Step 9: steamcmd wrapper ==="
+# /usr/local/bin/steamcmd → wrapper exec'ing ~dune/steamcmd/steamcmd.sh.
+# A bare symlink does not work: steamcmd.sh uses `dirname "$0"` (no realpath)
+# to find its own directory, so the symlink would make it look for
+# /usr/local/bin/linux32/steamcmd instead of ~dune/steamcmd/linux32/steamcmd.
+if [ -x /usr/local/bin/steamcmd ] && grep -q '/home/dune/steamcmd/steamcmd.sh' /usr/local/bin/steamcmd 2>/dev/null; then
+    skip "steamcmd wrapper already present"
+else
+    cat > /usr/local/bin/steamcmd << 'EOF'
+#!/bin/sh
+exec /home/dune/steamcmd/steamcmd.sh "$@"
+EOF
+    chmod 0755 /usr/local/bin/steamcmd
+    ok "steamcmd wrapper written"
+fi
+
+echo ""
 echo "=== Verification summary ==="
 echo -n "k3s binary:       "; "$K3S_BIN" --version 2>/dev/null || echo "MISSING"
 echo -n "kubectl symlink:  "; readlink /usr/local/bin/kubectl 2>/dev/null || echo "MISSING"
@@ -286,6 +303,7 @@ echo -n "k3s config:       "; [ -f /etc/rancher/k3s/config.yaml ]         && ech
 echo -n "kubelet config:   "; [ -f /etc/rancher/k3s/kubelet-config.yaml ] && echo "ok" || echo "MISSING"
 echo -n "rc.k3s script:    "; [ -x /etc/rc.d/rc.k3s ]         && echo "ok" || echo "MISSING"
 echo -n "sudoers entry:    "; [ -f /etc/sudoers.d/dune-k3s ]  && echo "ok" || echo "MISSING"
+echo -n "steamcmd wrapper: "; [ -x /usr/local/bin/steamcmd ]  && echo "ok" || echo "MISSING"
 echo -n "dune-vg swap:     "; swapon --show | grep -q 'dune-vg' && echo "ok" || echo "MISSING"
 echo -n "backups mounted:  "; mountpoint -q "$BACKUPS_MOUNT"  && echo "ok" || echo "MISSING"
 
