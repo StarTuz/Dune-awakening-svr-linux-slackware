@@ -86,11 +86,16 @@ sudo kubectl patch battlegroup "$BG" -n "$NS" \
   -p="[{\"op\":\"replace\",\"path\":\"/spec/serverGroup/template/spec/sets/${INDEX}/replicas\",\"value\":${REPLICAS}}]"
 echo "BattleGroup CR patched."
 
-# 2. Patch the ServerSetScale (final pod-creation trigger)
-sudo kubectl patch serversetscale "$SCALE" -n "$NS" \
-  --type='json' \
-  -p="[{\"op\":\"replace\",\"path\":\"/spec/replicas\",\"value\":${REPLICAS}}]"
-echo "ServerSetScale patched."
+# 2. Patch the ServerSetScale if it exists (final pod-creation trigger for maps
+#    that were stopped at cluster start; maps that were running do not have one)
+if sudo kubectl get serversetscale "$SCALE" -n "$NS" &>/dev/null; then
+    sudo kubectl patch serversetscale "$SCALE" -n "$NS" \
+      --type='json' \
+      -p="[{\"op\":\"replace\",\"path\":\"/spec/replicas\",\"value\":${REPLICAS}}]"
+    echo "ServerSetScale patched."
+else
+    echo "No ServerSetScale for $MAP — BattleGroup CR patch is sufficient."
+fi
 
 echo ""
 if [[ "$CMD" == "start" ]]; then
