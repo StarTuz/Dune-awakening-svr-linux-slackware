@@ -1,8 +1,8 @@
 # Dune Server Setup — Status
 
-Last updated: 2026-05-13 — Survival_1, Overmap, and DeepDesert_1 all running
+Last updated: 2026-05-14 — FLS GameRmqHttpAddress bug fixed; server browser investigation ongoing
 
-## Current state: fully running ✅
+## Current state ✅
 
 | Namespace | Component | Status |
 |---|---|---|
@@ -13,28 +13,92 @@ Last updated: 2026-05-13 — Survival_1, Overmap, and DeepDesert_1 all running
 | funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | postgres, rabbitmq, gateway, director, text-router, filebrowser | Running |
 | funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | Survival_1 | Running (~3.3 Gi RSS, 5 Gi req / 12 Gi limit) |
 | funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | Overmap | Running (~165 Mi RSS, 200 Mi req / 1 Gi limit, swap-backed) |
-| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | DeepDesert_1 | Running (~954 Mi RSS, 3 Gi req / 10 Gi limit) |
+| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | DeepDesert_1 | **Stopped** (ServerSetScale=0 after last restart — start with `map-toggle.sh start DeepDesert_1`) |
 
 Battlegroup: `sh-db3533a2d5a25fb-xyyxbx` ("Slackware-Arrakis"), Phase: Healthy
+
+## FLS server browser (as of 2026-05-14)
+
+The server is **not yet visible** in the PTC experimental browser. All known our-side issues have been fixed or confirmed correct. Possibly a Funcom-side delay or test-tier requirement.
+
+### What was found and fixed
+
+**`GameRmqHttpAddress: "47.145.51.160:None"` (fixed 2026-05-14)**
+
+The gateway's Python service discovers RabbitMQ NodePorts via the Kubernetes API. It successfully found the `amqp` port (NodePort 31982) but not the `http` port (NodePort 30196) because the port name in the service doesn't match what the code expects. This caused every `GatewayDeclareFarmStatus` FLS call to send `GameRmqHttpAddress: "47.145.51.160:None"`.
+
+Fix: added `--RMQGameHttpPort=30196` to the gateway Deployment args via JSON patch. The gateway now sends `GameRmqHttpAddress: "47.145.51.160:30196"` correctly.
+
+**Caveat**: this patch is applied to the Deployment directly. The server-operator regenerates the gateway Deployment from the BattleGroup CR on every restart or update, wiping the patch. Scripts exist to re-apply it:
+
+```sh
+# After any battlegroup restart:
+~/dune-server/scripts/gateway-patch.sh
+
+# For updates (does update + patch in one step):
+~/dune-server/scripts/update.sh
+```
+
+### Confirmed correct (do not re-investigate)
+
+| Item | Status |
+|---|---|
+| Router port forwarding UDP 7782-7790 | ✅ confirmed in place |
+| Router port forwarding TCP 31982 (RMQ AMQP NodePort) | ✅ confirmed in place |
+| `DatacenterId` / `-FarmRegion=` / director env var all set to `"North America Test"` | ✅ |
+| `GameRmqAddress: "47.145.51.160:31982"` | ✅ |
+| `GameRmqHttpAddress: "47.145.51.160:30196"` | ✅ (fixed 2026-05-14) |
+| Survival_1 declared to FLS (`DeclareBattlegroupUpdates` with UpDeclarations, partition 1) | ✅ |
+| 8-hour heartbeat firing (`HeartbeatUpdatesByPartitionId`) | ✅ (confirmed 13:46 UTC 2026-05-14) |
+
+### FLS declaration chain (for reference)
+
+1. **`GatewayDeclareFarmStatus`** — gateway, once at startup. Registers the farm: `DatacenterId`, `BattlegroupId`, `DisplayName`, `GameRmqAddress`, `GameRmqHttpAddress`. This is the call that had the `None` bug.
+
+2. **`DeclareBattlegroupUpdates`** — director, ~4 minutes after game server pods start. Triggered when the BGD subsystem (BattlegroupDirectorSubsystem) initializes inside the game server and sends its first `ready=true` ServerState via Admin RMQ to the director. Contains `UpDeclarationsByPartitionId` for Survival_1 (partition 1). **Wait at least 5 minutes** after a battlegroup restart before checking the browser.
+
+3. **`HeartbeatUpdatesByPartitionId`** — director, every 8 hours (`FlsServerHeartbeatUpdateFrequencySeconds=28800`). Refreshes the declaration to prevent expiry.
+
+**Note on Overmap**: The director pre-loads Overmap's server ID from the `world_partition` DB at startup, so it never sees a DOWN→UP transition and never sends an `UpDeclaration` for it. This is expected — `IsStartingMap: false` for Overmap, so FLS only needs Survival_1 for browser visibility.
+
+## How to update
+
+```sh
+# Preferred — full pipeline:
+~/dune-server/scripts/update.sh
+
+# What it does internally:
+#   1. steamcmd +app_update 3104830 validate  (pre-fetch; the `validate` flag
+#      works around Funcom revoking old PTC depot manifests)
+#   2. funcom-patches.sh  (re-applies our Slackware patches to
+#      server/scripts/setup/experimental_swap.sh, overwritten by step 1)
+#   3. battlegroup.sh update  (Funcom flow: steamcmd no-op now, operator
+#      image+CRD update, BattleGroup CR patched to new image revision —
+#      triggers rolling restart)
+#   4. gateway-patch.sh  (restores --RMQGameHttpPort=30196 on the gateway
+#      Deployment if it was wiped)
+```
+
+The Funcom Windows deployment runs `battlegroup.bat` → `battlegroup.ps1` → SSH into VM → `battlegroup.sh update`. Our setup adds the `validate` pre-fetch and Slackware patch re-application around that.
 
 ## RAM picture
 
 - Physical RAM: 16 GB
 - Conan Exiles Enhanced (co-tenant): ~9.5 GB RSS
 - Available: ~6.5 GB
-- Game servers in use: ~4.4 Gi RSS (Survival_1 + Overmap + DeepDesert_1)
-- **Result: all three game servers fit in available RAM. Swap is not under pressure.**
+- Game servers in use (Survival_1 + Overmap): ~3.5 Gi RSS (DeepDesert_1 currently stopped)
+- **Result: servers fit in available RAM. Swap is not under pressure.**
 
-Total swap: **62 GB** (zram 15.5 + dune-vg SSD 32 + sdc1 15.4) — available as headroom only.
+Total swap: **62 GB** (zram 15.5 + dune-vg SSD 32 + sdc1 15.4) — headroom only.
 
-Overmap's *request* is 200 Mi (swap mode) but its actual RSS is ~165 Mi, so it barely touches swap. Deep Desert's request is 3 Gi but actual RSS is ~954 Mi. Survival_1's request is 5 Gi against ~3.3 Gi actual RSS. The gap between request and reality is wide — there is room to start additional maps if needed.
+Overmap's *request* is 200 Mi (swap mode) but actual RSS is ~165 Mi. Survival_1 request is 5 Gi against ~3.3 Gi actual. Wide gap between request and reality — room to start more maps.
 
-**After motherboard swap (64 GB):** Overmap can run at full allocation (remove the 200 Mi request patch). All game servers will comfortably fit with no swap dependency.
+**After motherboard swap (64 GB):** remove the 200 Mi swap-mode request from Overmap; all servers comfortably in RAM.
 
 ## Map management
 
 ```sh
-# See all 28 maps and which are currently on/off
+# See all 28 maps and which are on/off
 ~/dune-server/scripts/map-toggle.sh list
 
 # Start or stop a map
@@ -42,9 +106,9 @@ Overmap's *request* is 200 Mi (swap mode) but its actual RSS is ~165 Mi, so it b
 ~/dune-server/scripts/map-toggle.sh stop  DeepDesert_1
 ```
 
-**Important:** Do not patch `ServerSet` or `ServerGroup` replicas directly. Starting a map requires patching both the `BattleGroup CR` and the `ServerSetScale` — `map-toggle.sh` handles both. Patching only the BattleGroup CR propagates through ServerGroup and ServerSet but the `ServerSetScale` (final pod-creation trigger) does not auto-update, leaving the map stuck in `Stopped` phase.
+**Important:** Do not patch `ServerSet` or `ServerGroup` replicas directly. Starting a map requires patching both the `BattleGroup CR` and the `ServerSetScale` — `map-toggle.sh` handles both. Patching only the BattleGroup CR leaves the map stuck in `Stopped` phase because `ServerSetScale` (the final pod-creation trigger) does not auto-update.
 
-After a k3s restart, maps do not come back automatically — use `map-toggle.sh start` or `battlegroup.sh restart`.
+After a k3s restart, maps do not come back automatically — use `map-toggle.sh start` or `battlegroup.sh restart` (followed by `gateway-patch.sh`).
 
 ## VPA memory recommendations
 
@@ -67,11 +131,13 @@ Baseline readings (2026-05-13, single user): Survival_1 ~3.3 Gi, Overmap ~165 Mi
 
 ## What still needs doing
 
+- [ ] Server browser visibility — server not appearing in PTC browser; all our-side declarations confirmed correct; possibly Funcom-side. Re-check after a fresh restart + 5 min wait.
+- [ ] Re-apply gateway patch after every restart: `~/dune-server/scripts/gateway-patch.sh`
 - [ ] Confirm motherboard swap outcome (64 GB recognised?) — reboot and verify with `free -h`
-- [ ] After board swap: raise Overmap request back to its natural limit (remove 200 Mi swap patch)
+- [ ] After board swap: raise Overmap request back to its natural limit (remove 200 Mi swap patch via `experimental_swap.sh`)
 - [ ] Set up backup jobs writing to `/srv/backups/dune/` and `/srv/backups/conan/`
 - [ ] Off-server backup strategy (rsync to NAS / rclone to cloud — TBD)
-- [ ] Create `settings.conf` (`printf '\n\n\n192.168.254.200\n' > ~/.dune/settings.conf`) — missing, no known failures yet
+- [ ] Create `settings.conf` (`printf '\n\n\n47.145.51.160\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
 
 ## Bootstrapping fixes applied (fresh cluster workarounds)
 
@@ -81,11 +147,14 @@ The Funcom scripts assume a cloud-provisioned base — these were done manually:
 - **ServiceMonitor CRD** installed (prometheus-operator CRD needed by database operator)
 - **Funcom operator deployments** created from scratch (namespace, SA, CRB, Deployments)
 - **Webhook TLS** — self-signed cert mounted into all 4 operator pods
-- **operator.sh** — fixed `kubectl replace` → `kubectl apply --server-side` for fresh installs
-- **world.sh** — added Europe Test / North America Test regions to the region menu
+- **operator.sh** — fresh-install workaround: `kubectl replace` fails when CRDs don't yet exist. Before running `setup.sh` on a new cluster, manually apply CRDs with `sudo kubectl apply --server-side -f ~/dune-server/server/images/operators/crds/`. Not auto-patched — only matters during bootstrap
+- **experimental_swap.sh** — Slackware patches now managed via `scripts/funcom-patches/`; re-applied automatically by `funcom-patches.sh` after every `update.sh` run
+- **steamcmd wrapper** — `/usr/local/bin/steamcmd` execs `~dune/steamcmd/steamcmd.sh` (a bare symlink fails because steamcmd uses `dirname $0` to find its own files). Created by `root-setup.sh` Step 9
+- **world.sh** — added Europe Test / North America Test regions to the region menu (one-time, only used during world creation; if lost, re-add manually before re-running)
 - **memory-focused-scheduler** — host daemon deployed; auto-starts via `/etc/rc.d/rc.local`
 - **root-setup.sh** ✅ ran 2026-05-13 — k3s shims, rc.k3s, sudoers, LVM swap + backup volume
 - **experimental_swap.sh** ✅ ran 2026-05-13 — swap enabled, all map memory requests patched down
+- **gateway `--RMQGameHttpPort=30196`** ✅ fixed 2026-05-14 — see `gateway-patch.sh`
 
 ## Storage (as of 2026-05-13)
 
@@ -99,18 +168,24 @@ The Funcom scripts assume a cloud-provisioned base — these were done manually:
 
 ## Boot sequence (on reboot)
 
-rc.local starts (in order):
-1. QEMU guest agent (existing)
+rc.local starts automatically:
+1. QEMU guest agent
 2. `memory-focused-scheduler` daemon
-3. k3s must be started manually: `sudo rc-service k3s start`
 
-After k3s is up, maps do not restart automatically. Start them:
+Then manually:
+```sh
+sudo rc-service k3s start
+```
+
+After k3s is up, maps do not restart automatically. Start them, then re-apply the gateway patch:
 ```sh
 ~/dune-server/server/scripts/battlegroup.sh restart
-# or individually:
+~/dune-server/scripts/gateway-patch.sh
+# or start maps individually:
 ~/dune-server/scripts/map-toggle.sh start Survival_1
 ~/dune-server/scripts/map-toggle.sh start Overmap
 ~/dune-server/scripts/map-toggle.sh start DeepDesert_1
+~/dune-server/scripts/gateway-patch.sh
 ```
 
 ## Key paths
@@ -121,6 +196,8 @@ After k3s is up, maps do not restart automatically. Start them:
 | Funcom scripts | `~/dune-server/server/scripts/` |
 | Our scripts | `~/dune-server/scripts/` |
 | Battlegroup mgmt | `~/dune-server/server/scripts/battlegroup.sh` |
+| Update (with gateway patch) | `~/dune-server/scripts/update.sh` |
+| Gateway patch (post-restart) | `~/dune-server/scripts/gateway-patch.sh` |
 | Map toggle | `~/dune-server/scripts/map-toggle.sh` |
 | Scheduler daemon | `~/dune-server/scripts/memory-focused-scheduler.sh` |
 | Scheduler log | `~/dune-server/logs/memory-focused-scheduler.log` |

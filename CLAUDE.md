@@ -114,9 +114,14 @@ Funcom's Windows depot (3104831) ships a pre-built Hyper-V VM (`.vhdx` + `.vmcx`
 
 | Script | Purpose |
 |---|---|
-| `root-setup.sh` | Run once as root: installs k3s, creates shims, writes rc.k3s, sets sudoers, sets up LVM swap + backup volume |
+| `root-setup.sh` | Run once as root: installs k3s, creates shims (incl. steamcmd wrapper), writes rc.k3s, sets sudoers, sets up LVM swap + backup volume |
 | `memory-focused-scheduler.sh` | Custom Kubernetes scheduler daemon — binds pending pods to the single k3s node. Auto-starts via rc.local |
 | `map-toggle.sh` | Start/stop individual maps; handles the full BattleGroup CR + ServerSetScale chain |
+| `update.sh` | Full update flow: steamcmd pre-fetch with `validate`, re-apply funcom patches, run Funcom update, re-apply gateway patch |
+| `gateway-patch.sh` | Apply `--RMQGameHttpPort=30196` to gateway Deployment (idempotent; re-run after every restart) |
+| `funcom-patches.sh` | Re-apply Slackware patches to Funcom-shipped scripts after SteamCMD overwrites (uses baselines in `funcom-patches/`) |
+| `funcom-patches/` | Patched copies of Funcom scripts + `.upstream` baselines for drift detection |
+| `port-preempt.py` | Hold UDP 7779-7781 to prevent Dune game servers from binding ports owned by Path of Titans on the router |
 | `sudoer.sh` | One-liner fallback to patch sudoers + restart k3s (emergency use) |
 | `vpa/install.sh` | Install VPA recommender: downloads CRDs, applies RBAC + deployment, runs vpa-objects.sh |
 | `vpa/recommender-rbac.yaml` | ServiceAccount + ClusterRoles + bindings for vpa-recommender in kube-system |
@@ -145,13 +150,16 @@ echo "rc-update: $*  (stubbed on Slackware)"
 ```
 `rc-update add k3s` calls are no-ops; k3s boot is handled by rc.local instead.
 
-**`operator.sh`** — changed `kubectl replace` → `kubectl apply --server-side --force-conflicts` so CRD installs work on a fresh cluster.
+**`world.sh`** — added "Europe Test" / "North America Test" to the region list. Note: SteamCMD updates overwrite this file; if Funcom hasn't merged these regions upstream by then, our additions will be lost on next update. Not currently managed by `funcom-patches/` because `world.sh` is only used during initial world creation.
 
-**`world.sh`** — added "Europe Test" / "North America Test" to the region list.
-
-**`experimental_swap.sh`** — patched for Slackware:
-- Skips swapfile creation if swap is already active (we have ~30 GB via sdc1 + zram0)
+**`experimental_swap.sh`** — patched for Slackware (durable via `funcom-patches/`):
+- Skips swapfile creation if swap is already active (we have ~62 GB via zram + dune-vg + sdc1)
 - Replaces Alpine cgroup path (`/sys/fs/cgroup/openrc.k3s/memory.swap.max`) with a dynamic lookup of the k3s process cgroup using `/proc/<pid>/cgroup` and the cgroup v1 `memory.memsw.limit_in_bytes` interface
+- Idempotency guards on `sudo tee` / `sudo cp` for k3s config (so re-running works under our sudoers whitelist)
+
+The patched file lives at `scripts/funcom-patches/experimental_swap.sh` and is re-applied by `scripts/funcom-patches.sh` after every SteamCMD update (wired into `update.sh`). The driver detects upstream drift via a stored baseline (`*.upstream` sidecar) — if Funcom changes the script underneath us, the driver warns instead of silently clobbering.
+
+**`operator.sh`** — `kubectl replace` in `replace_custom_resources` fails on a fresh cluster where CRDs do not yet exist. On existing clusters (our normal update path) it works fine. **Fresh-install workaround**: before running `setup.sh`, manually apply the CRDs once with `sudo kubectl apply --server-side -f ~/dune-server/server/images/operators/crds/`. Not patched via `funcom-patches/` because it only matters during one-time bootstrap.
 
 **`~/.dune/bin/battlegroup`** symlink — `system.sh` creates this but was never run during our manual bootstrap. Created manually: `ln -s ~/dune-server/server/scripts/battlegroup.sh ~/.dune/bin/battlegroup`.
 
