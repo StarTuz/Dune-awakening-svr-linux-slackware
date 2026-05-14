@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mount)",
+      "Bash(sudo rc-service k3s status)",
+      "Bash(sudo rc-service *)",
+      "Bash(journalctl -u k3s -f)",
+      "Read(//var/log/**)",
+      "Bash(sudo kubectl get nodes)",
+      "Bash(bash *)",
+      "Bash(sudo kubectl *)",
+      "Bash(curl -s --max-time 5 https://github.com)",
+      "Bash(curl -sv --max-time 5 https://github.com)",
+      "Bash(sudo k3s ctr -n k8s.io images list)",
+      "Bash(sudo ls /var/lib/rancher/k3s/server/manifests/)",
+      "Bash(sudo k3s ctr -n k8s.io images ls)",
+      "Bash(awk 'NR>1 && !/sha256:/ {print $1}')",
+      "Bash(awk 'NR>1 {print $1}')",
+      "Bash(mkdir -p /tmp/op-inspect)",
+      "Bash(sudo k3s ctr -n k8s.io content ls)",
+      "Bash(sudo k3s ctr -n k8s.io run --rm --net-host registry.funcom.com/funcom/self-hosting/igw-k8s-battlegroup-operator:v1.5.0 op-inspect-bg ls /)",
+      "Bash(sudo k3s ctr -n k8s.io image export /tmp/bgop.tar registry.funcom.com/funcom/self-hosting/igw-k8s-battlegroup-operator:v1.5.0)",
+      "Bash(tar -tf /tmp/bgop.tar)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 *)",
+      "Bash(curl -fL https://github.com/cert-manager/cert-manager/releases/download/v1.8.0/cert-manager.yaml)",
+      "Bash(openssl req *)",
+      "Bash(xargs file)",
+      "Bash(curl -fL https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/main/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml)",
+      "Bash(echo \"PID: $!\")"
+    ]
+  }
+}

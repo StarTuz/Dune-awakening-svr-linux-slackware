@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vpa-recommender
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vpa-recommender
+  template:
+    metadata:
+      labels:
+        app: vpa-recommender
+    spec:
+      serviceAccountName: vpa-recommender
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+      containers:
+      - name: recommender
+        image: registry.k8s.io/autoscaling/vpa-recommender:1.6.0
+        imagePullPolicy: IfNotPresent
+        # Tuned down from upstream defaults (500Mi req / 1000Mi limit) for our
+        # memory-constrained single-node setup. Bump if recommender OOMs.
+        resources:
+          requests:
+            cpu: 25m
+            memory: 100Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+        ports:
+        - name: prometheus
+          containerPort: 8942
+        livenessProbe:
+          httpGet:
+            path: /health-check
+            port: prometheus
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health-check
+            port: prometheus
+          periodSeconds: 10
+          failureThreshold: 3
