@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Operations repository for a Dune: Awakening self-hosted battlegroup running natively on Slackware Linux, co-hosted with an existing Conan Exiles Enhanced server. `README.md` is an early research snapshot; `STATUS.md` is the current authoritative state.
 
-**Current state**: Fully running as of 2026-05-13. Survival_1, Overmap, and DeepDesert_1 are all up. Total game server RSS ~4.4 Gi — fits in available RAM with no meaningful swap pressure. Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB (zram + dune-vg SSD + sdc1) available as headroom. VPA recommender live (Off mode, memory only). Motherboard replacement to 64 GB pending.
+**Current state**: Fully running as of 2026-05-13; security hardening applied 2026-05-14. Survival_1, Overmap, and DeepDesert_1 are all up. Total game server RSS ~4.4 Gi — fits in available RAM with no meaningful swap pressure. Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB (zram + dune-vg SSD + sdc1) available as headroom. VPA recommender live (Off mode, memory only). Motherboard replacement to 64 GB pending. FLS token expires 2026-09-05 — rotate by 2026-08-20.
 
 ---
 
@@ -168,6 +168,53 @@ The patched file lives at `scripts/funcom-patches/experimental_swap.sh` and is r
 - ServiceMonitor CRD installed (required by database operator)
 - Operator deployments created from scratch (namespace, SA, CRB, Deployments)
 - Webhook TLS: self-signed cert mounted into all 4 operator pods
+
+---
+
+## Security
+
+Hardening applied 2026-05-14. Read this section before touching the firewall, SSH, or k3s networking.
+
+### firewalld
+
+firewalld 1.3.3 is installed and starts from `/etc/rc.d/rc.local`. **Must use `FirewallBackend=iptables`** — the nftables backend conflicts with k3s CNI (flannel) and corrupts pod networking. Set in `/etc/firewalld/firewalld.conf`.
+
+Two zones:
+- **`public`** (eth0): ssh, dune-game (UDP 7782-7790), dune-rmq (TCP 31982+30196), conan-exiles (UDP 7777-7778/14001/27015, TCP 25575/8088). Masquerade on.
+- **`trusted`** (target ACCEPT): sources 127.0.0.1/8, 192.168.254.0/24 (LAN), 10.42.0.0/16 (pod CIDR), 10.43.0.0/16 (service CIDR); interfaces cni0, flannel.1.
+
+Custom service XMLs live in `/etc/firewalld/services/`. **Zone XML files must begin with `<?xml` as the very first byte** — leading whitespace causes `INVALID_SERVICE: XML or text declaration not at start of entity`. Verify with `head -c1 /etc/firewalld/zones/public.xml | xxd -p` (must output `3c`).
+
+After editing XML files, do a full stop+start (not `--reload`) to pick up the changes: `sudo /etc/rc.d/rc.firewalld stop && sudo /etc/rc.d/rc.firewalld start`.
+
+### SSH
+
+Key-only authentication. `/etc/ssh/sshd_config`:
+```
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+```
+
+Only `startux` and `dune` have authorized keys. Keys are RSA-4096 (defiant's OpenSSH is too old for ed25519 — `unsupported` error from libcrypto).
+
+### k3s API security — do NOT use bind-address
+
+**Do not add `bind-address: 127.0.0.1` to `/etc/rancher/k3s/config.yaml`.** The Kubernetes `kubernetes` service has a ClusterIP (10.43.0.1) with an Endpoint pointing to the node IP (192.168.254.200:6443). kube-proxy DNATs pod→API traffic to that endpoint. If the API server only listens on 127.0.0.1, nothing answers on 192.168.254.200:6443 and every operator crashes with `connection refused`. The firewall (trusted zone) is sufficient — external API access is blocked without needing bind-address.
+
+### FLS JWT token
+
+The FLS JWT is embedded in the BattleGroup CR args — it appears 28 times (once per map set entry). **It expires 2026-09-05. Rotate by 2026-08-20.**
+
+When rotating: get a new token from the Funcom portal, patch all 28 occurrences in the BattleGroup CR, then run `gateway-patch.sh`. This is planned as a dune-ctl feature (expiry warning + guided rotation).
+
+### Operator recovery after stuck state
+
+If battlegroup gets stuck in `Stopped` after a restart:
+
+1. Check `MessageQueue` CRs: `sudo kubectl get messagequeues -n funcom-seabass-<bg>`. If any show `spec.suspend: True`, patch them false: `sudo kubectl patch messagequeue <name> -n <ns> --type=merge -p '{"spec":{"suspend":false}}'`
+2. If operators show `Error` status: `sudo kubectl rollout restart deployment -n funcom-operators` — let them stabilize (1-2 min) before checking battlegroup status.
+3. **Do not manually scale StatefulSets** owned by MessageQueue CRs. Manual scaling bypasses the operator's lifecycle state machine and leaves `status.phase` and `status.managementAddress` stuck, causing the battlegroup to remain Stopped even after pods appear.
+4. After operators recover, the battlegroup reconciles automatically. Then run `gateway-patch.sh`.
 
 ---
 

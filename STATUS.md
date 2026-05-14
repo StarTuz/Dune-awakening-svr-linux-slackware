@@ -1,6 +1,6 @@
 # Dune Server Setup — Status
 
-Last updated: 2026-05-14 — FLS GameRmqHttpAddress bug fixed; server browser investigation ongoing
+Last updated: 2026-05-14 — Security hardening complete; FLS browser visible
 
 ## Current state ✅
 
@@ -137,15 +137,32 @@ sudo kubectl describe vpa <name> -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
 
 Baseline readings (2026-05-13, single user): Survival_1 ~3.3 Gi, Overmap ~165 Mi, DeepDesert_1 ~954 Mi.
 
+## Security hardening (2026-05-14) ✅
+
+All items applied. Details in CLAUDE.md § Security.
+
+| Item | Status |
+|---|---|
+| firewalld with iptables backend (k3s-safe) | ✅ configured, public + trusted zones, boot entry in rc.local |
+| SSH key-only auth (RSA-4096 from defiant) | ✅ PasswordAuthentication + KbdInteractiveAuthentication both `no` |
+| `~/.dune/*.yaml` permissions 600 | ✅ |
+| PostgreSQL passwords rotated | ✅ ALTER USER applied; CR + on-disk YAML updated |
+| k3s API `bind-address: 127.0.0.1` | ❌ REVERTED — breaks pod→API DNAT; firewall is sufficient |
+| SNMP disabled | ✅ off |
+| FLS token expiry tracking | ⏳ planned for dune-ctl; token expires 2026-09-05, rotate by 2026-08-20 |
+
 ## What still needs doing
 
 - [x] ~~Server browser visibility~~ — resolved 2026-05-14, "Slackware-Arrakis" visible in EXPERIMENTAL list
+- [x] ~~Security hardening~~ — resolved 2026-05-14; see above
 - [ ] Re-apply gateway patch after every restart: `~/dune-server/scripts/gateway-patch.sh`
 - [ ] Confirm motherboard swap outcome (64 GB recognised?) — reboot and verify with `free -h`
 - [ ] After board swap: raise Overmap request back to its natural limit (remove 200 Mi swap patch via `experimental_swap.sh`)
 - [ ] Set up backup jobs writing to `/srv/backups/dune/` and `/srv/backups/conan/`
 - [ ] Off-server backup strategy (rsync to NAS / rclone to cloud — TBD)
 - [ ] Create `settings.conf` (`printf '\n\n\n47.145.51.160\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
+- [ ] **Rotate FLS token before 2026-08-20** (expires 2026-09-05) — update BattleGroup CR args (28 occurrences) + re-apply gateway patch
+- [ ] Build dune-ctl (Rust TUI + web) — FLS token expiry warning is planned feature
 
 ## Bootstrapping fixes applied (fresh cluster workarounds)
 
@@ -177,8 +194,9 @@ The Funcom scripts assume a cloud-provisioned base — these were done manually:
 ## Boot sequence (on reboot)
 
 rc.local starts automatically:
-1. QEMU guest agent
-2. `memory-focused-scheduler` daemon
+1. firewalld
+2. QEMU guest agent
+3. `memory-focused-scheduler` daemon
 
 Then manually:
 ```sh
