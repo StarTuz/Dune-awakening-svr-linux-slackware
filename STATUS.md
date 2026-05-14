@@ -151,6 +151,23 @@ All items applied. Details in CLAUDE.md § Security.
 | SNMP disabled | ✅ off |
 | FLS token expiry tracking | ✅ in dune-ctl (`token-check`); token expires 2027-05-08, rotate by 2027-04-08 |
 
+## LAN client workaround (defiant / 192.168.254.17)
+
+The Frontier NVG468MQ router does not support NAT hairpin. LAN clients connecting
+via the FLS browser hang because the external IP (47.145.51.160) is unreachable
+from inside the LAN through the router.
+
+Fix applied on defiant via firewalld direct rule (nat OUTPUT DNAT):
+
+```sh
+sudo firewall-cmd --permanent --direct --add-rule ipv4 nat OUTPUT 0 \
+    -d 47.145.51.160 -j DNAT --to-destination 192.168.254.200
+sudo firewall-cmd --reload
+```
+
+Any other LAN client that wants to connect needs the same rule (or equivalent
+iptables/nftables OUTPUT DNAT). The rule is permanent and survives reboots.
+
 ## What still needs doing
 
 - [x] ~~Server browser visibility~~ — resolved 2026-05-14, "Slackware-Arrakis" visible in EXPERIMENTAL list
