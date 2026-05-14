@@ -17,9 +17,17 @@ Last updated: 2026-05-14 — FLS GameRmqHttpAddress bug fixed; server browser in
 
 Battlegroup: `sh-db3533a2d5a25fb-xyyxbx` ("Slackware-Arrakis"), Phase: Healthy
 
-## FLS server browser (as of 2026-05-14)
+## FLS server browser ✅ visible (as of 2026-05-14)
 
-The server is **not yet visible** in the PTC experimental browser. All known our-side issues have been fixed or confirmed correct. Possibly a Funcom-side delay or test-tier requirement.
+"Slackware-Arrakis" appears in the EXPERIMENTAL browser tab with "Arrakis-SlackwareLinux" (password-protected) below it. The "0 ms" ping shown is a Funcom-side display anomaly affecting every server in the list, not specific to ours.
+
+### Likely root cause: stale build version
+
+The server only became visible after updating from build `23147813` to `23216207` (battlegroup image `1957345-0-shipping`). The gateway `--RMQGameHttpPort=30196` fix was applied earlier the same day and did not produce visibility on its own — the version bump was the last thing changed before the browser showed the server.
+
+Probable mechanism: FLS rejects outdated builds from the browser to prevent players from joining incompatible servers. Funcom does not document a minimum build requirement, but the behaviour fits.
+
+**Future debugging**: if the server vanishes from the browser, *first* run `~/dune-server/scripts/update.sh` and wait at least 5 minutes for `DeclareBattlegroupUpdates` to re-fire. Only re-investigate FLS declarations if visibility doesn't return after an update.
 
 ### What was found and fixed
 
@@ -131,7 +139,7 @@ Baseline readings (2026-05-13, single user): Survival_1 ~3.3 Gi, Overmap ~165 Mi
 
 ## What still needs doing
 
-- [ ] Server browser visibility — server not appearing in PTC browser; all our-side declarations confirmed correct; possibly Funcom-side. Re-check after a fresh restart + 5 min wait.
+- [x] ~~Server browser visibility~~ — resolved 2026-05-14, "Slackware-Arrakis" visible in EXPERIMENTAL list
 - [ ] Re-apply gateway patch after every restart: `~/dune-server/scripts/gateway-patch.sh`
 - [ ] Confirm motherboard swap outcome (64 GB recognised?) — reboot and verify with `free -h`
 - [ ] After board swap: raise Overmap request back to its natural limit (remove 200 Mi swap patch via `experimental_swap.sh`)
