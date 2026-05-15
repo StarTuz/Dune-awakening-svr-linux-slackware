@@ -19,6 +19,7 @@ Commands:
 
 Options:
   --bg NAME   Battlegroup name without funcom-seabass- prefix.
+  --wait SEC  Wait up to SEC seconds for Postgres to accept TCP connections.
 EOF
 }
 
@@ -30,11 +31,16 @@ fi
 cmd="$1"
 shift
 bgname=""
+wait_timeout=180
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --bg)
             bgname="${2:-}"
+            shift 2
+            ;;
+        --wait)
+            wait_timeout="${2:-}"
             shift 2
             ;;
         -h|--help)
@@ -113,6 +119,33 @@ psql_exec() {
         psql -h 127.0.0.1 -p "$db_port" -U "$user" -d "$database" -Atc "$sql" >/dev/null
 }
 
+wait_for_db() {
+    local timeout="${1:-180}"
+    local elapsed=0
+    local interval=5
+
+    echo "Waiting for Postgres in $db_pod to accept TCP on port $db_port..."
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if sudo kubectl exec -n "$ns" "$db_pod" -- sh -c "pg_isready -h 127.0.0.1 -p '$db_port' >/dev/null 2>&1"; then
+            echo "Postgres is accepting connections."
+            return 0
+        fi
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+        echo "  Still waiting for Postgres... (${elapsed}s / ${timeout}s)"
+
+        local replacement
+        replacement="$(find_db_pod || true)"
+        if [ -n "$replacement" ] && [ "$replacement" != "$db_pod" ]; then
+            db_pod="$replacement"
+            echo "Database pod changed; now checking $db_pod"
+        fi
+    done
+
+    echo "ERROR: timed out waiting for Postgres readiness in $db_pod" >&2
+    return 1
+}
+
 patch_specs() {
     echo "Patching BattleGroup database credential spec for $bgname..."
     sudo kubectl patch battlegroup "$bgname" -n "$ns" --type=merge -p \
@@ -171,12 +204,14 @@ case "$cmd" in
         ;;
     check)
         echo "Checking DB credentials against $db_pod on port $db_port..."
+        wait_for_db "$wait_timeout"
         psql_exec "$super_user" "$super_password" postgres "select 1"
         psql_exec "$db_user" "$db_password" "$db_name" "select 1"
         echo "Database credentials OK."
         ;;
     fix)
         patch_specs
+        wait_for_db "$wait_timeout"
         fix_passwords
         echo "Re-checking DB credentials..."
         psql_exec "$super_user" "$super_password" postgres "select 1"

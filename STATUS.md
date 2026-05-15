@@ -78,6 +78,9 @@ Fix: added `--RMQGameHttpPort=30196` to the gateway Deployment args via JSON pat
 # Resume after a failure where backup+stop already completed:
 ~/dune-server/scripts/update.sh --skip-backup --skip-stop --start-after
 
+# Resume after Funcom update completed but DB/gateway/start did not:
+~/dune-server/scripts/update.sh --post-update-only --start-after
+
 # What it does internally:
 #   1. dune-backup.sh  (host bundle + DB dump unless --skip-backup)
 #   2. Stop BattleGroup  (unless --skip-stop; avoids updating live maps)
@@ -105,6 +108,10 @@ The Funcom Windows deployment runs `battlegroup.bat` → `battlegroup.ps1` → S
 (`CB_Overland_S_07`, `CB_Overland_S_08`, `CB_Dungeon_ThePit`). The local
 `scripts/funcom-patches/experimental_swap.sh` and `.upstream` baseline have
 been refreshed with those entries.
+
+2026-05-15 update wrapper note: after a BattleGroup image patch, the DB pod may
+exist before Postgres is listening. `db-credentials.sh` now waits for
+`pg_isready` before deciding whether credentials are actually broken.
 
 ## RAM picture
 

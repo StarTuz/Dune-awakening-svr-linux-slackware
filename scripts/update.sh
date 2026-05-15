@@ -21,6 +21,7 @@ skip_backup=0
 skip_stop=0
 skip_db_fix=0
 start_after=0
+post_update_only=0
 bgname=""
 steamcmd_path="${STEAMCMD:-}"
 steamcmd_user="${SUDO_USER:-$USER}"
@@ -37,6 +38,7 @@ Options:
   --skip-stop        Do not stop the battlegroup before updating
   --skip-db-fix      Do not run DB credential check/repair after updating
   --start-after      Start the battlegroup after successful update
+  --post-update-only Only run post-update checks, gateway patch, and optional start
   -h, --help         Show this help
 EOF
 }
@@ -65,6 +67,12 @@ while [ "$#" -gt 0 ]; do
             ;;
         --start-after)
             start_after=1
+            shift
+            ;;
+        --post-update-only)
+            post_update_only=1
+            skip_backup=1
+            skip_stop=1
             shift
             ;;
         -h|--help)
@@ -176,7 +184,10 @@ echo "Namespace:   $ns"
 echo "SteamCMD:    $steamcmd_path"
 echo "Steam user:  $steamcmd_user"
 
-if [ "$skip_backup" -eq 0 ]; then
+if [ "$post_update_only" -eq 1 ]; then
+    echo ""
+    echo "=== Post-update-only mode: skipping backup, stop, SteamCMD, patch preflight, and Funcom update flow ==="
+elif [ "$skip_backup" -eq 0 ]; then
     echo ""
     echo "=== Pre-update backup ==="
     "$SCRIPT_DIR/dune-backup.sh" --bg "$bgname"
@@ -185,7 +196,7 @@ else
     echo "=== Pre-update backup skipped by request ==="
 fi
 
-if [ "$skip_stop" -eq 0 ]; then
+if [ "$post_update_only" -eq 0 ] && [ "$skip_stop" -eq 0 ]; then
     echo ""
     echo "=== Stopping battlegroup before update ==="
     patch_stop true
@@ -195,31 +206,33 @@ else
     echo "=== Battlegroup stop skipped by request ==="
 fi
 
-echo ""
-echo "=== Pre-fetching with validate (works around revoked PTC manifests) ==="
-run_steamcmd +force_install_dir "$DOWNLOAD_PATH" \
-    +login anonymous +app_update 3104830 validate +quit
+if [ "$post_update_only" -eq 0 ]; then
+    echo ""
+    echo "=== Pre-fetching with validate (works around revoked PTC manifests) ==="
+    run_steamcmd +force_install_dir "$DOWNLOAD_PATH" \
+        +login anonymous +app_update 3104830 validate +quit
 
-echo ""
-echo "=== Re-applying Slackware patches to Funcom scripts ==="
-"$SCRIPT_DIR/funcom-patches.sh"
+    echo ""
+    echo "=== Re-applying Slackware patches to Funcom scripts ==="
+    "$SCRIPT_DIR/funcom-patches.sh"
 
-echo ""
-echo "=== Running Funcom update flow ==="
-"$DOWNLOAD_PATH/scripts/battlegroup.sh" update
+    echo ""
+    echo "=== Running Funcom update flow ==="
+    "$DOWNLOAD_PATH/scripts/battlegroup.sh" update
 
-echo ""
-echo "=== Re-applying Slackware patches after Funcom update flow ==="
-"$SCRIPT_DIR/funcom-patches.sh"
+    echo ""
+    echo "=== Re-applying Slackware patches after Funcom update flow ==="
+    "$SCRIPT_DIR/funcom-patches.sh"
+fi
 
 if [ "$skip_db_fix" -eq 0 ]; then
     echo ""
     echo "=== Verifying database utility credentials ==="
-    if "$SCRIPT_DIR/db-credentials.sh" check --bg "$bgname"; then
+    if "$SCRIPT_DIR/db-credentials.sh" check --bg "$bgname" --wait 300; then
         echo "Database credentials are valid."
     else
         echo "Database credential check failed; attempting repair..."
-        "$SCRIPT_DIR/db-credentials.sh" fix --bg "$bgname"
+        "$SCRIPT_DIR/db-credentials.sh" fix --bg "$bgname" --wait 300
     fi
 else
     echo ""
