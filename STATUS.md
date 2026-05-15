@@ -95,8 +95,9 @@ Fix: added `--RMQGameHttpPort=30196` to the gateway Deployment args via JSON pat
 #      because Funcom setup/system.sh uses non-idempotent `ln -s`)
 #   6. funcom-patches.sh again  (guards against battlegroup.sh update overwrites)
 #   7. db-credentials.sh check/fix  (guards against Postgres password drift)
-#   8. gateway-patch.sh  (restores --RMQGameHttpPort=30196 on the gateway
-#      Deployment if it was wiped)
+#   8. If --start-after, start the BattleGroup, then gateway-patch.sh waits
+#      for the gateway Deployment and restores --RMQGameHttpPort=30196 if it
+#      was wiped)
 ```
 
 By default the wrapper leaves the battlegroup stopped after a successful update.

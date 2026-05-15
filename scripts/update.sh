@@ -255,15 +255,21 @@ else
     echo "=== Database credential repair skipped by request ==="
 fi
 
-echo ""
-echo "=== Re-applying gateway RMQ HTTP port patch ==="
-"$SCRIPT_DIR/gateway-patch.sh"
-
 if [ "$start_after" -eq 1 ]; then
     echo ""
     echo "=== Starting battlegroup after update ==="
     patch_stop false
+
+    echo ""
+    echo "=== Re-applying gateway RMQ HTTP port patch ==="
+    "$SCRIPT_DIR/gateway-patch.sh"
 else
+    echo ""
+    echo "=== Re-applying gateway RMQ HTTP port patch ==="
+    if ! "$SCRIPT_DIR/gateway-patch.sh"; then
+        echo "Gateway patch deferred; battlegroup may be stopped. Run gateway-patch.sh after starting." >&2
+    fi
+
     echo ""
     echo "Battlegroup remains stopped. Start when ready:"
     echo "  ~/dune-server/server/scripts/battlegroup.sh start"

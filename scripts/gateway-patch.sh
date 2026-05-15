@@ -17,9 +17,44 @@ NS=$(sudo kubectl get ns --no-headers -o custom-columns=NAME:.metadata.name \
 BG="${NS#funcom-seabass-}"
 GW_DEPLOY="${BG}-sgw-deploy"
 
+find_gateway_deploy() {
+    sudo kubectl get deployments -n "$NS" --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null \
+        | grep -- '-sgw-deploy$' \
+        | head -n1
+}
+
+wait_for_gateway_deploy() {
+    local timeout="${1:-180}"
+    local elapsed=0
+    local interval=5
+    local found
+
+    while [ "$elapsed" -lt "$timeout" ]; do
+        found="$(find_gateway_deploy || true)"
+        if [ -n "$found" ]; then
+            GW_DEPLOY="$found"
+            return 0
+        fi
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+        echo "  Still waiting for gateway deployment... (${elapsed}s / ${timeout}s)"
+    done
+
+    echo "ERROR: gateway deployment not found in $NS after ${timeout}s." >&2
+    echo "If the battlegroup is stopped, start it first and rerun this script." >&2
+    return 1
+}
+
 echo "Gateway: $GW_DEPLOY"
 echo "Namespace: $NS"
 echo ""
+
+if ! sudo kubectl get deployment "$GW_DEPLOY" -n "$NS" >/dev/null 2>&1; then
+    echo "Gateway deployment is not present yet; waiting for operator to create it..."
+    wait_for_gateway_deploy 180
+    echo "Gateway: $GW_DEPLOY"
+    echo ""
+fi
 
 if sudo kubectl get deployment "$GW_DEPLOY" -n "$NS" -o json \
    | jq -e '.spec.template.spec.containers[0].args | any(. == "--RMQGameHttpPort=30196")' \
