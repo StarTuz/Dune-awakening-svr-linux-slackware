@@ -76,18 +76,26 @@ Fix: added `--RMQGameHttpPort=30196` to the gateway Deployment args via JSON pat
 ~/dune-server/scripts/update.sh
 
 # What it does internally:
-#   1. steamcmd +app_update 3104830 validate  (pre-fetch; the `validate` flag
+#   1. dune-backup.sh  (host bundle + DB dump unless --skip-backup)
+#   2. Stop BattleGroup  (unless --skip-stop; avoids updating live maps)
+#   3. steamcmd +app_update 3104830 validate  (pre-fetch; the `validate` flag
 #      works around Funcom revoking old PTC depot manifests)
-#   2. funcom-patches.sh  (re-applies our Slackware patches to
-#      server/scripts/setup/experimental_swap.sh, overwritten by step 1)
-#   3. battlegroup.sh update  (Funcom flow: steamcmd no-op now, operator
+#   4. funcom-patches.sh  (re-applies our Slackware patches to
+#      server/scripts/setup/experimental_swap.sh, overwritten by SteamCMD)
+#   5. battlegroup.sh update  (Funcom flow: steamcmd, operator
 #      image+CRD update, BattleGroup CR patched to new image revision —
-#      triggers rolling restart)
-#   4. gateway-patch.sh  (restores --RMQGameHttpPort=30196 on the gateway
+#      triggers rollout)
+#   6. funcom-patches.sh again  (guards against battlegroup.sh update overwrites)
+#   7. db-credentials.sh check/fix  (guards against Postgres password drift)
+#   8. gateway-patch.sh  (restores --RMQGameHttpPort=30196 on the gateway
 #      Deployment if it was wiped)
 ```
 
-The Funcom Windows deployment runs `battlegroup.bat` → `battlegroup.ps1` → SSH into VM → `battlegroup.sh update`. Our setup adds the `validate` pre-fetch and Slackware patch re-application around that.
+By default the wrapper leaves the battlegroup stopped after a successful update.
+Use `~/dune-server/scripts/update.sh --start-after` if you want it restarted
+automatically.
+
+The Funcom Windows deployment runs `battlegroup.bat` → `battlegroup.ps1` → SSH into VM → `battlegroup.sh update`. Our setup adds backup, stop, `validate` pre-fetch, Slackware patch re-application, DB credential verification/repair, and the gateway patch around that.
 
 ## RAM picture
 

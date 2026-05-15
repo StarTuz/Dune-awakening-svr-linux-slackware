@@ -47,6 +47,7 @@ Common paths for the native Slackware Dune: Awakening deployment.
 | Local scripts root | `/home/dune/dune-server/scripts` |
 | Root bootstrap | `/home/dune/dune-server/scripts/root-setup.sh` |
 | Update pipeline | `/home/dune/dune-server/scripts/update.sh` |
+| DB credential guard | `/home/dune/dune-server/scripts/db-credentials.sh` |
 | Gateway patch | `/home/dune/dune-server/scripts/gateway-patch.sh` |
 | Map toggle | `/home/dune/dune-server/scripts/map-toggle.sh` |
 | Funcom patch driver | `/home/dune/dune-server/scripts/funcom-patches.sh` |

@@ -56,6 +56,7 @@ sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db353
 ~/dune-server/server/scripts/battlegroup.sh restart
 ~/dune-server/scripts/gateway-patch.sh
 ~/dune-server/scripts/update.sh
+~/dune-server/scripts/db-credentials.sh check
 
 # Maps
 ~/dune-server/scripts/map-toggle.sh list

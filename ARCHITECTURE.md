@@ -329,6 +329,10 @@ The live deployment diverges from Funcom's expected VM in these ways:
 - Gateway deployment needs a local RMQ HTTP port patch after regeneration.
 - LAN client needs local OUTPUT DNAT because the Frontier router lacks hairpin
   NAT.
+- The local update wrapper adds safety around Funcom's update flow: backup,
+  stop, double patch re-application, DB credential verification/repair, and
+  gateway patch. This is intentionally more conservative than invoking
+  `server/scripts/battlegroup.sh update` directly.
 
 ## Operational Invariants
 
