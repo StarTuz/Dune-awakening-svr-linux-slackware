@@ -95,6 +95,13 @@ classify_sensitive_service() {
     local target_port="$3"
     local node_port="$4"
 
+    if [[ "$service" == *mq-game-svc ]] && [ "$target_port" = "5672" ] && [ "$node_port" = "31982" ]; then
+        return 1
+    fi
+    if [[ "$service" == *mq-game-svc ]] && [ "$target_port" = "15672" ] && [ "$node_port" = "30196" ]; then
+        return 1
+    fi
+
     case "$service:$port_name:$target_port:$node_port" in
         *bgd*|*director*|*filebrowser*|*file-browser*|*db*|*pghero*|*mon*)
             return 0
@@ -103,6 +110,21 @@ classify_sensitive_service() {
             return 0
             ;;
     esac
+
+    return 1
+}
+
+classify_expected_public_service() {
+    local service="$1"
+    local target_port="$2"
+    local node_port="$3"
+
+    if [[ "$service" == *mq-game-svc ]] && [ "$target_port" = "5672" ] && [ "$node_port" = "31982" ]; then
+        return 0
+    fi
+    if [[ "$service" == *mq-game-svc ]] && [ "$target_port" = "15672" ] && [ "$node_port" = "30196" ]; then
+        return 0
+    fi
 
     return 1
 }
@@ -160,6 +182,12 @@ else
                 fail "$service nodePort $node_port/$proto is sensitive and allowed by firewalld public zone"
             else
                 ok "$service nodePort $node_port/$proto is not allowed by firewalld public zone"
+            fi
+        elif classify_expected_public_service "$service" "$target_port" "$node_port"; then
+            if [ "$public" = "yes" ]; then
+                ok "$service nodePort $node_port/$proto is expected to be public"
+            else
+                warning "$service nodePort $node_port/$proto is expected to be public but is not allowed by firewalld public zone"
             fi
         fi
     done <<< "$nodeport_rows"
