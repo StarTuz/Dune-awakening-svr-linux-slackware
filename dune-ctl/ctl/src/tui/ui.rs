@@ -9,7 +9,9 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Tabs, Wrap},
+    widgets::{
+        Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Tabs, Wrap,
+    },
     Frame,
 };
 
@@ -38,6 +40,9 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_hints(f, app, chunks[4]);
     if app.pending.is_some() {
         draw_confirmation(f, app);
+    }
+    if app.input.is_some() {
+        draw_input(f, app);
     }
 }
 
@@ -500,7 +505,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
         View::Settings => "[Tab/1] dashboard",
     };
     let view_actions = match app.view {
-        View::Settings => " [t] toggle  [a] apply settings ",
+        View::Settings => " [e] edit  [t] toggle  [a] apply settings ",
         _ => " [s/x] map ",
     };
     f.render_widget(
@@ -612,6 +617,7 @@ fn draw_settings_detail(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(""));
         lines.push(Line::from("[t] toggles this setting locally"));
     }
+    lines.push(Line::from("[e] edits this setting locally"));
     lines.push(Line::from("[a] deploys both User*.ini files"));
 
     f.render_widget(
@@ -620,6 +626,50 @@ fn draw_settings_detail(f: &mut Frame, app: &App, area: Rect) {
                 Block::default()
                     .borders(Borders::ALL)
                     .title("Setting Detail"),
+            )
+            .wrap(Wrap { trim: true }),
+        area,
+    );
+}
+
+fn draw_input(f: &mut Frame, app: &App) {
+    let Some(input) = app.input.as_ref() else {
+        return;
+    };
+    let area = centered_rect(68, 10, f.area());
+    let lines = vec![
+        Line::from(Span::styled(
+            format!("Edit {}", input.key),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(input.label.as_str()),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Value: ", Style::default().fg(Color::DarkGray)),
+            Span::raw(input.value.as_str()),
+            Span::styled(" ", Style::default().bg(Color::White)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("[Enter] save locally", Style::default().fg(Color::Green)),
+            Span::raw("    "),
+            Span::styled("[Esc] cancel", Style::default().fg(Color::Red)),
+            Span::raw("    "),
+            Span::styled("[Del] clear", Style::default().fg(Color::DarkGray)),
+        ]),
+    ];
+
+    f.render_widget(Clear, area);
+    f.render_widget(
+        Paragraph::new(lines)
+            .alignment(Alignment::Left)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .title("Edit Setting"),
             )
             .wrap(Wrap { trim: true }),
         area,

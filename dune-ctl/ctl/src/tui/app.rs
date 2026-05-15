@@ -24,6 +24,7 @@ pub struct App {
     pub selected: usize,
     pub settings_selected: usize,
     pub pending: Option<PendingAction>,
+    pub input: Option<InputMode>,
     pub loading: bool,
     pub running: bool,
 }
@@ -41,6 +42,13 @@ pub enum PendingAction {
     StopBattlegroup,
     RestartBattlegroup,
     ApplySettings,
+}
+
+#[derive(Debug, Clone)]
+pub struct InputMode {
+    pub key: String,
+    pub label: String,
+    pub value: String,
 }
 
 impl PendingAction {
@@ -80,6 +88,7 @@ impl App {
             selected: 0,
             settings_selected: 0,
             pending: None,
+            input: None,
             loading: true,
             running: true,
         }
@@ -172,6 +181,11 @@ async fn finish_refresh(app: &mut App) {
 }
 
 async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
+    if app.input.is_some() {
+        handle_input_key(app, code).await;
+        return;
+    }
+
     if app.pending.is_some() {
         match code {
             KeyCode::Char('y') | KeyCode::Enter => execute_pending(app).await,
@@ -242,6 +256,11 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 toggle_selected_setting(app).await;
             }
         }
+        KeyCode::Char('e') => {
+            if app.view == View::Settings {
+                begin_setting_edit(app);
+            }
+        }
         KeyCode::Char('a') => {
             if app.view == View::Settings {
                 app.pending = Some(PendingAction::ApplySettings);
@@ -285,6 +304,58 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         }
         _ => {}
     }
+}
+
+async fn handle_input_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc => {
+            app.input = None;
+            app.push_log("setting edit cancelled");
+        }
+        KeyCode::Enter => {
+            let Some(input) = app.input.take() else {
+                return;
+            };
+            match settings::set(&app.cfg, &input.key, &input.value).await {
+                Ok(()) => {
+                    app.push_log(format!("{} set to {}", input.key, input.value));
+                    start_refresh(app);
+                }
+                Err(e) => {
+                    app.push_log(format!("settings edit error: {:#}", e));
+                    app.input = Some(input);
+                }
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(input) = app.input.as_mut() {
+                input.value.pop();
+            }
+        }
+        KeyCode::Delete => {
+            if let Some(input) = app.input.as_mut() {
+                input.value.clear();
+            }
+        }
+        KeyCode::Char(c) if !c.is_control() => {
+            if let Some(input) = app.input.as_mut() {
+                input.value.push(c);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn begin_setting_edit(app: &mut App) {
+    let Some(item) = app.settings.get(app.settings_selected) else {
+        app.push_log("no setting selected");
+        return;
+    };
+    app.input = Some(InputMode {
+        key: item.def.key.to_string(),
+        label: item.def.label.to_string(),
+        value: item.value.clone().unwrap_or_default(),
+    });
 }
 
 async fn execute_pending(app: &mut App) {
