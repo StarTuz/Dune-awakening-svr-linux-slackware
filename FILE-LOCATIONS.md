@@ -49,6 +49,7 @@ Common paths for the native Slackware Dune: Awakening deployment.
 | Update pipeline | `/home/dune/dune-server/scripts/update.sh` |
 | DB credential guard | `/home/dune/dune-server/scripts/db-credentials.sh` |
 | Gateway patch | `/home/dune/dune-server/scripts/gateway-patch.sh` |
+| Security exposure audit | `/home/dune/dune-server/scripts/security-audit.sh` |
 | Map toggle | `/home/dune/dune-server/scripts/map-toggle.sh` |
 | Funcom patch driver | `/home/dune/dune-server/scripts/funcom-patches.sh` |
 | Funcom patch baselines | `/home/dune/dune-server/scripts/funcom-patches/*.upstream` |

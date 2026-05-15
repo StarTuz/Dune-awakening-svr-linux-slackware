@@ -64,6 +64,17 @@ Important custom firewalld services:
 - `dune-rmq`: TCP `31982` and `30196`
 - `conan-exiles`: Conan UDP/TCP ports
 
+The public zone must not expose Director, Filebrowser, Postgres, the k3s API, or
+RabbitMQ admin ports. Check sensitive Kubernetes NodePorts against firewalld's
+effective public services with:
+
+```sh
+~/dune-server/scripts/security-audit.sh
+```
+
+The host cannot verify Frontier router forwarding directly; router forwards
+still need to be checked in the router UI.
+
 Known failure mode: a stale nftables `table inet firewalld` can remain active
 even while firewalld is using the iptables backend. In that state, iptables may
 allow Dune UDP while the stale nft input hook still rejects packets with

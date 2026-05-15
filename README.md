@@ -69,6 +69,7 @@ sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db353
 grep -n '^FirewallBackend' /etc/firewalld/firewalld.conf
 firewall-cmd --info-service=dune-game
 nft list tables
+~/dune-server/scripts/security-audit.sh
 
 # Memory
 free -h
