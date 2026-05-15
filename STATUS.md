@@ -81,8 +81,8 @@ Fix: added `--RMQGameHttpPort=30196` to the gateway Deployment args via JSON pat
 # What it does internally:
 #   1. dune-backup.sh  (host bundle + DB dump unless --skip-backup)
 #   2. Stop BattleGroup  (unless --skip-stop; avoids updating live maps)
-#   3. steamcmd +app_update 3104830 validate  (pre-fetch via /home/dune/steamcmd;
-#      avoids sudo expanding ~ to /root; the `validate` flag
+#   3. steamcmd +app_update 3104830 validate  (runs as the sudo caller with
+#      HOME=/home/dune; avoids root's Steam state; the `validate` flag
 #      works around Funcom revoking old PTC depot manifests)
 #   4. funcom-patches.sh  (re-applies our Slackware patches to
 #      server/scripts/setup/experimental_swap.sh, overwritten by SteamCMD)

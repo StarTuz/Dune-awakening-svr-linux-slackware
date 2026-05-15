@@ -23,6 +23,8 @@ skip_db_fix=0
 start_after=0
 bgname=""
 steamcmd_path="${STEAMCMD:-}"
+steamcmd_user="${SUDO_USER:-$USER}"
+steamcmd_home=""
 
 usage() {
     cat <<EOF
@@ -111,21 +113,19 @@ patch_stop() {
 }
 
 resolve_steamcmd() {
+    if command -v getent >/dev/null 2>&1; then
+        steamcmd_home="$(getent passwd "$steamcmd_user" | cut -d: -f6)"
+    fi
+    if [ -z "$steamcmd_home" ]; then
+        steamcmd_home="/home/$steamcmd_user"
+    fi
+
     if [ -n "$steamcmd_path" ]; then
         return
     fi
 
-    local owner="${SUDO_USER:-$USER}"
-    local owner_home=""
-    if command -v getent >/dev/null 2>&1; then
-        owner_home="$(getent passwd "$owner" | cut -d: -f6)"
-    fi
-    if [ -z "$owner_home" ]; then
-        owner_home="/home/$owner"
-    fi
-
     for candidate in \
-        "$owner_home/steamcmd/steamcmd.sh" \
+        "$steamcmd_home/steamcmd/steamcmd.sh" \
         "/home/dune/steamcmd/steamcmd.sh" \
         "$HOME/steamcmd/steamcmd.sh"; do
         if [ -x "$candidate" ]; then
@@ -137,6 +137,15 @@ resolve_steamcmd() {
     echo "ERROR: steamcmd.sh not found." >&2
     echo "Set it explicitly with: $0 --steamcmd /path/to/steamcmd.sh" >&2
     exit 1
+}
+
+run_steamcmd() {
+    if [ "$(id -u)" -eq 0 ] && [ "$steamcmd_user" != "root" ]; then
+        sudo -u "$steamcmd_user" env HOME="$steamcmd_home" USER="$steamcmd_user" \
+            "$steamcmd_path" "$@"
+    else
+        env HOME="$steamcmd_home" USER="$steamcmd_user" "$steamcmd_path" "$@"
+    fi
 }
 
 wait_stopped() {
@@ -165,6 +174,7 @@ echo "=== Dune update target ==="
 echo "Battlegroup: $bgname"
 echo "Namespace:   $ns"
 echo "SteamCMD:    $steamcmd_path"
+echo "Steam user:  $steamcmd_user"
 
 if [ "$skip_backup" -eq 0 ]; then
     echo ""
@@ -187,7 +197,7 @@ fi
 
 echo ""
 echo "=== Pre-fetching with validate (works around revoked PTC manifests) ==="
-"$steamcmd_path" +force_install_dir "$DOWNLOAD_PATH" \
+run_steamcmd +force_install_dir "$DOWNLOAD_PATH" \
     +login anonymous +app_update 3104830 validate +quit
 
 echo ""
