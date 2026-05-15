@@ -175,6 +175,21 @@ wait_stopped() {
     echo "WARNING: game pods still running after ${timeout}s; continuing cautiously." >&2
 }
 
+prepare_funcom_symlinks() {
+    # Funcom's setup/system.sh uses plain `ln -s` and exits nonzero if these
+    # already exist, which prevents our post-update DB/gateway/start steps.
+    local bin_dir="/home/dune/.dune/bin"
+    local name
+
+    for name in battlegroup bg-util; do
+        if [ -L "$bin_dir/$name" ]; then
+            rm -f "$bin_dir/$name"
+        elif [ -e "$bin_dir/$name" ]; then
+            echo "WARNING: $bin_dir/$name exists and is not a symlink; Funcom setup may fail to refresh it." >&2
+        fi
+    done
+}
+
 select_battlegroup
 resolve_steamcmd
 
@@ -218,6 +233,7 @@ if [ "$post_update_only" -eq 0 ]; then
 
     echo ""
     echo "=== Running Funcom update flow ==="
+    prepare_funcom_symlinks
     "$DOWNLOAD_PATH/scripts/battlegroup.sh" update
 
     echo ""

@@ -333,6 +333,10 @@ The live deployment diverges from Funcom's expected VM in these ways:
   stop, double patch re-application, DB credential verification/repair, and
   gateway patch. This is intentionally more conservative than invoking
   `server/scripts/battlegroup.sh update` directly.
+- Before invoking Funcom's update flow, the wrapper removes existing
+  `~/.dune/bin/battlegroup` and `~/.dune/bin/bg-util` symlinks. Funcom's
+  `setup/system.sh` recreates them with plain `ln -s`, which otherwise exits
+  nonzero if the links already exist and prevents local post-update steps.
 - Database credential checks discover the live Postgres port from the current
   DatabaseDeployment/status/service. This matters because the updated operator
   can listen on `5432` even when older local assumptions expected `15432`.

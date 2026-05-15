@@ -91,7 +91,8 @@ Fix: added `--RMQGameHttpPort=30196` to the gateway Deployment args via JSON pat
 #      server/scripts/setup/experimental_swap.sh, overwritten by SteamCMD)
 #   5. battlegroup.sh update  (Funcom flow: steamcmd, operator
 #      image+CRD update, BattleGroup CR patched to new image revision —
-#      triggers rollout)
+#      triggers rollout; wrapper clears stale ~/.dune/bin symlinks first
+#      because Funcom setup/system.sh uses non-idempotent `ln -s`)
 #   6. funcom-patches.sh again  (guards against battlegroup.sh update overwrites)
 #   7. db-credentials.sh check/fix  (guards against Postgres password drift)
 #   8. gateway-patch.sh  (restores --RMQGameHttpPort=30196 on the gateway
