@@ -1,298 +1,109 @@
-# Dune: Awakening Native Slackware Self-Host Notes
-
-Research and handoff notes for running the Dune: Awakening self-hosted server
-fully natively on Slackware Linux.
-
-No server code has been installed here yet. These notes capture the state of the
-host and the intended direction before continuing work as the future `dune`
-user.
-
-## Goal
-
-Run one Dune: Awakening battlegroup natively on Slackware, co-hosted with the
-existing Conan Exiles Enhanced server.
-
-This machine will not use Windows or Hyper-V. Funcom's first supported
-self-hosted path is Windows Pro plus Hyper-V orchestration, but their public
-statements and Steam metadata indicate Linux server payloads exist. The work
-here is to unwrap/adapt the Linux side for Slackware once the self-hosted server
-package is available.
-
-## Current Hardware And OS
-
-- Hostname: `arrakis.algieba.org`
-- OS: `Slackware 15.0+`
-- Kernel: `6.18.26`
-- CPU: `Intel Core i7-9700`, 8 physical cores, no SMT
-- Current RAM: `16 GB`
-- Expected RAM: `64 GB` after mainboard replacement
-- Swap: about `30 GB`
-  - `/dev/sdc1`: about `15.4 GB`
-  - `/dev/zram0`: about `15.5 GB`, higher priority
-- Root/storage: btrfs on `/dev/sdc2`, about `917 GB`, about `877 GB` free
-- glibc: `2.42`
-- GCC: `15.2.0`
-- Multilib/compat32: present and broad
-- Network:
-  - LAN IP: `192.168.254.200/24`
-  - Gateway: `192.168.254.254`
-
-## Current Services Relevant To Dune
-
-Conan Exiles Enhanced is already running under its own user:
-
-```text
-user: conan
-uid: 1001
-gid: 100/users
-home: /home/conan
-shell: /bin/ksh
-```
-
-The Conan server process observed:
-
-```text
-/home/conan/conan-enhanced-server/server/ConanSandbox/Binaries/Linux/ConanSandboxServer-Linux-Shipping
-```
-
-Current Conan launch arguments include:
-
-```text
--MaxPlayers=20 -Port=7777 -QueryPort=27015 -RconPort=25575 -log -useallavailablecores
-```
-
-Observed memory use while running:
-
-```text
-RSS: about 9.5 GB
-CPU: about 20-25% at the moment checked
-```
-
-Ports already occupied by Conan or related tooling:
-
-```text
-UDP 7777
-UDP 7778
-UDP 14001
-UDP 27015
-TCP 25575
-TCP 8088 on 127.0.0.1
-```
-
-Other listening services observed:
-
-```text
-TCP 22       sshd
-TCP 80       httpd
-UDP 123      ntpd
-UDP 5353     avahi
-UDP 161      snmpd
-```
-
-## Installed/Absent Pieces
-
-Present:
-
-- Slackware rc.d service model
-- `screen`
-- `lxc`
-- `qemu-system-x86_64`
-- `iptables`
-- `nftables`
-- `rsync`
-- `smartmontools`
-- `sysstat`
-- `logrotate`
-- `btrfs-progs`
-- 32-bit runtime compatibility libraries
-- Vulkan/Mesa packages, including compat32 variants
-
-Not currently on PATH:
-
-- `steamcmd`
-- `psql`
-- `postgres`
-- `docker`
-- `podman`
-
-Virtualization note:
-
-- `/dev/kvm` was not present.
-- The kernel reported VMX unsupported for KVM mitigation output.
-- This is probably firmware/mainboard configuration or the current board issue.
-- Native Dune is still the goal, but KVM should be enabled later if possible as
-  a fallback tool.
-
-## Slackware Assessment
-
-Slackware is not the weak point. This host has a modern kernel, modern glibc,
-current compiler stack, btrfs, multilib, and a proven Unreal dedicated server
-workflow from Conan.
-
-The likely problems are Funcom packaging assumptions:
-
-- Their first public setup flow targets Windows Pro plus Hyper-V.
-- Direct Linux is described as technically possible but not streamlined.
-- Scripts may assume Ubuntu/Debian paths, packages, or systemd.
-- Scripts may expect cgroup v2 behavior; this host is currently using cgroup v1.
-- PostgreSQL bootstrap details are unknown until the real package/docs land.
-- Port layout for one battlegroup is unknown and may conflict with Conan.
-
-The intended Slackware solution is to run Dune under its own user with explicit
-shell scripts and an `/etc/rc.d/rc.dune` style wrapper once the process layout is
-known.
-
-## Intended Dune User
-
-The user should create this account manually:
-
-```text
-login: dune
-primary group: users
-home: /home/dune
-shell: /bin/ksh
-```
-
-This mirrors the existing `conan` account style.
-
-Suggested home layout after logging in as `dune`:
-
-```text
-/home/dune/
-  steamcmd/
-  dune-server/
-    server/
-    config/
-    logs/
-    scripts/
-    backups/
-    steamapps/
-```
-
-The exact layout can change once the official files are available. Keep Dune
-separate from Conan even if they share system packages.
-
-## Suggested Next Steps As `dune`
-
-Do not try to run the full battlegroup until RAM is upgraded.
-
-Safe preparation work:
-
-1. Confirm the new account:
-
-   ```sh
-   id
-   pwd
-   umask
-   ```
-
-2. Create a lightweight directory skeleton:
-
-   ```sh
-   mkdir -p ~/dune-server/{server,config,logs,scripts,backups,steamapps}
-   mkdir -p ~/steamcmd
-   chmod 700 ~/dune-server/config ~/dune-server/backups
-   ```
-
-3. Confirm SteamCMD availability from the Conan setup or install a separate
-   copy for `dune`.
-
-4. Once the self-hosted server package is available, download only. Do not start
-   it immediately.
-
-5. Inspect launch scripts and binaries first:
-
-   ```sh
-   find ~/dune-server -maxdepth 4 -type f
-   find ~/dune-server -maxdepth 4 -type f -name '*.sh' -o -name '*.ini' -o -name '*.json'
-   ```
-
-6. Check linked library requirements on Linux binaries:
-
-   ```sh
-   ldd /path/to/DuneServerBinary
-   ```
-
-7. Identify default ports before launch and avoid Conan's occupied ports.
-
-8. Identify database requirements:
-
-   - Does Funcom ship a local Postgres bundle?
-   - Does it expect system PostgreSQL?
-   - What database name, role, and schema bootstrap does it require?
-
-9. Only after config and ports are understood, perform a dry foreground launch
-   with logs redirected to `~/dune-server/logs/`.
-
-## Port Planning
-
-Conan already uses the common Unreal/Steam ports. Dune should get a distinct
-range.
-
-Avoid:
-
-```text
-7777/udp
-7778/udp
-14001/udp
-27015/udp
-25575/tcp
-```
-
-Candidate Dune range, subject to official config support:
-
-```text
-UDP 7787-7799
-UDP 27025-27039
-TCP 25585-25599
-```
-
-Do not commit to those numbers until the Dune package reveals how many services
-and map processes a battlegroup starts.
-
-## RAM Constraint
-
-Current 16 GB is below the practical threshold, especially with Conan using
-about 9.5 GB RSS.
-
-After the board/RAM fix:
-
-- `64 GB` should be enough for first native Dune testing beside Conan.
-- Watch actual RSS per Dune process, not just total system memory.
-- Avoid swap during gameplay; zram is useful as protection, not capacity.
-
-Useful checks:
+# Dune: Awakening Slackware Self-Host
+
+Operations repository for running a Dune: Awakening self-hosted battlegroup
+natively on Slackware Linux, co-hosted with the existing Conan Exiles Enhanced
+server on `arrakis.algieba.org`.
+
+`STATUS.md` is the current source of truth. `ARCHITECTURE.md` explains the
+system shape and control loops. `FILE-LOCATIONS.md` indexes important paths.
+`CLAUDE.md` contains detailed operator notes for future agent sessions.
+
+## Current State
+
+- Host: `arrakis.algieba.org`
+- LAN IP: `192.168.254.200`
+- Public IP: `47.145.51.160`
+- Battlegroup: `sh-db3533a2d5a25fb-xyyxbx` / `Slackware-Arrakis`
+- Namespace: `funcom-seabass-sh-db3533a2d5a25fb-xyyxbx`
+- Current maps: `Survival_1` and `Overmap` running
+- `DeepDesert_1`: cleanly stopped unless explicitly started with `map-toggle.sh`
+- Server browser: visible in the PTC/Experimental browser
+- Hagga Basin travel: confirmed working after firewall cleanup
+
+## Important Operational Notes
+
+- Re-run `~/dune-server/scripts/gateway-patch.sh` after every battlegroup
+  restart or update. The operator can regenerate the gateway deployment and
+  lose `--RMQGameHttpPort=30196`.
+- Start and stop maps only with `~/dune-server/scripts/map-toggle.sh`. Do not
+  patch `ServerSet` or `ServerGroup` replicas directly.
+- `DeepDesert_1` must be cleanly on or off. The bad split state is
+  `BattleGroup replicas=1` with `ServerSetScale=0`.
+- firewalld must use `FirewallBackend=iptables`. If travel packets are rejected
+  despite correct firewalld services, check for stale nft state:
+
+  ```sh
+  nft list tables
+  ```
+
+  There should be no `table inet firewalld`. If it appears while the backend is
+  iptables, remove the stale table and reload firewalld:
+
+  ```sh
+  nft delete table inet firewalld
+  firewall-cmd --reload
+  ```
+
+## Common Commands
 
 ```sh
+# Overall status
+~/dune-server/server/scripts/battlegroup.sh status
+sudo kubectl get battlegroup -A -o wide
+sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
+
+# Restart/update
+~/dune-server/server/scripts/battlegroup.sh restart
+~/dune-server/scripts/gateway-patch.sh
+~/dune-server/scripts/update.sh
+
+# Maps
+~/dune-server/scripts/map-toggle.sh list
+~/dune-server/scripts/map-toggle.sh start DeepDesert_1
+~/dune-server/scripts/map-toggle.sh stop DeepDesert_1
+
+# Firewall sanity
+grep -n '^FirewallBackend' /etc/firewalld/firewalld.conf
+firewall-cmd --info-service=dune-game
+nft list tables
+
+# Memory
 free -h
-ps -eo pid,user,rss,vsz,pmem,pcpu,cmd --sort=-rss | head
-/usr/sbin/ss -tulpen
+swapon --show
+~/dune-server/scripts/vpa/watch-gameservers.sh --once
 ```
 
-## Future Service Model
+## Networking
 
-Once Dune can launch manually, wrap it in Slackware-native scripts:
+The Dune game UDP range is `7782-7790`. Conan Exiles owns `7777-7778` and other
+ports documented in `CLAUDE.md`, so Dune is kept above that range.
+
+LAN clients behind the Frontier router need an OUTPUT DNAT rule because the
+router does not provide NAT hairpin:
+
+```sh
+sudo firewall-cmd --permanent --direct --add-rule ipv4 nat OUTPUT 0 \
+  -d 47.145.51.160 -j DNAT --to-destination 192.168.254.200
+sudo firewall-cmd --reload
+```
+
+## Repository Layout
 
 ```text
-/home/dune/dune-server/scripts/start.sh
-/home/dune/dune-server/scripts/stop.sh
-/home/dune/dune-server/scripts/status.sh
-/etc/rc.d/rc.dune
+server/                  Funcom server package and scripts
+scripts/                 Local Slackware/operations scripts
+scripts/funcom-patches/  Local patches re-applied after SteamCMD updates
+dune-ctl/                Rust control/status tooling
+STATUS.md                Current operational state
+ARCHITECTURE.md          System architecture and control loops
+FILE-LOCATIONS.md        Important paths and logs
+CLAUDE.md                Detailed operator/agent guidance
+dune-ctl/TUI-MASCOT.md   TUI mascot design note
 ```
 
-The rc script should:
+## Historical Context
 
-- run as `dune`, not root
-- start database dependency first if needed
-- start the Dune coordinator/battlegroup process
-- write logs under `/home/dune/dune-server/logs`
-- stop cleanly before killing
-- avoid interfering with Conan
-
-## Sources Checked
-
-- Official Dune: Awakening self-hosting/developer update pages
-- Steam news for Dune: Awakening
-- Steam metadata indicating Linux server launch entries
-- Local Slackware host inventory
-
+This started as an unsupported native Slackware deployment of Funcom's
+self-hosted server, bypassing the supported Windows Pro + Hyper-V wrapper. The
+Windows package remains useful as a reference, but the live deployment runs k3s
+directly on Slackware.

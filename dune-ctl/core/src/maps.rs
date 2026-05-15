@@ -12,11 +12,8 @@ pub async fn stop(cfg: &Config, map_name: &str) -> Result<()> {
 
 async fn toggle(cfg: &Config, map_name: &str, replicas: u32) -> Result<()> {
     // Find the set index in the BattleGroup CR (mirrors map-toggle.sh INDEX derivation)
-    let bg = kubectl::get_json(&[
-        "get", "battlegroup", &cfg.battlegroup,
-        "-n", &cfg.namespace,
-    ])
-    .await?;
+    let bg =
+        kubectl::get_json(&["get", "battlegroup", &cfg.battlegroup, "-n", &cfg.namespace]).await?;
 
     let idx = find_map_index(&bg, map_name)
         .ok_or_else(|| anyhow::anyhow!("map '{}' not found in BattleGroup CR", map_name))?;
@@ -27,21 +24,22 @@ async fn toggle(cfg: &Config, map_name: &str, replicas: u32) -> Result<()> {
         idx, replicas
     );
     kubectl::run(&[
-        "patch", "battlegroup", &cfg.battlegroup,
-        "-n", &cfg.namespace,
-        "--type=json", &format!("-p={}", patch),
+        "patch",
+        "battlegroup",
+        &cfg.battlegroup,
+        "-n",
+        &cfg.namespace,
+        "--type=json",
+        &format!("-p={}", patch),
     ])
     .await?;
 
     // 2. Patch ServerSetScale if it exists — the final pod-creation trigger.
     // Name convention (from map-toggle.sh): ${BG}-${MAP_SLUG}
     let scale_name = format!("{}-{}", cfg.battlegroup, map_slug(map_name));
-    let scale_exists = kubectl::run(&[
-        "get", "serversetscale", &scale_name,
-        "-n", &cfg.namespace,
-    ])
-    .await
-    .is_ok();
+    let scale_exists = kubectl::run(&["get", "serversetscale", &scale_name, "-n", &cfg.namespace])
+        .await
+        .is_ok();
 
     if scale_exists {
         let scale_patch = format!(
@@ -49,9 +47,13 @@ async fn toggle(cfg: &Config, map_name: &str, replicas: u32) -> Result<()> {
             replicas
         );
         kubectl::run(&[
-            "patch", "serversetscale", &scale_name,
-            "-n", &cfg.namespace,
-            "--type=json", &format!("-p={}", scale_patch),
+            "patch",
+            "serversetscale",
+            &scale_name,
+            "-n",
+            &cfg.namespace,
+            "--type=json",
+            &format!("-p={}", scale_patch),
         ])
         .await?;
     }

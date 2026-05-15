@@ -1,8 +1,10 @@
 pub mod battlegroup;
 pub mod config;
+pub mod diagnostics;
 pub mod fls;
 pub mod gateway;
 pub mod health;
 pub mod kubectl;
 pub mod maps;
+pub mod settings;
 pub mod update;

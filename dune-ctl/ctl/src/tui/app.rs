@@ -3,30 +3,83 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use dune_ctl_core::{config::Config, gateway, health::HealthSnapshot, maps};
+use dune_ctl_core::{battlegroup, config::Config, gateway, health::HealthSnapshot, maps, settings};
 use ratatui::{backend::Backend, Terminal};
+use tokio::task::JoinHandle;
 
 use super::ui;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const EVENT_TIMEOUT: Duration = Duration::from_millis(200);
+type RefreshResult = Result<(HealthSnapshot, Vec<settings::SettingValue>)>;
 
 pub struct App {
     pub cfg: Config,
+    pub started_at: Instant,
     pub snapshot: Option<HealthSnapshot>,
+    pub settings: Vec<settings::SettingValue>,
+    pub refresh_task: Option<JoinHandle<RefreshResult>>,
     pub log: VecDeque<String>,
+    pub view: View,
     pub selected: usize,
+    pub settings_selected: usize,
+    pub pending: Option<PendingAction>,
     pub loading: bool,
     pub running: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Dashboard,
+    Maps,
+    Settings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingAction {
+    StartBattlegroup,
+    StopBattlegroup,
+    RestartBattlegroup,
+    ApplySettings,
+}
+
+impl PendingAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::StartBattlegroup => "start battlegroup",
+            Self::StopBattlegroup => "stop battlegroup",
+            Self::RestartBattlegroup => "restart battlegroup",
+            Self::ApplySettings => "deploy settings",
+        }
+    }
+
+    pub fn risk(self) -> &'static str {
+        match self {
+            Self::StartBattlegroup => "Starts all desired battlegroup infrastructure.",
+            Self::StopBattlegroup => "Stops the whole battlegroup. Connected players will be disconnected.",
+            Self::RestartBattlegroup => {
+                "Stops then starts the whole battlegroup. Gateway patch may need verification after rollout."
+            }
+            Self::ApplySettings => {
+                "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings. Some changes need a map or battlegroup restart."
+            }
+        }
+    }
 }
 
 impl App {
     fn new(cfg: Config) -> Self {
         Self {
             cfg,
+            started_at: Instant::now(),
             snapshot: None,
+            settings: Vec::new(),
+            refresh_task: None,
             log: VecDeque::with_capacity(64),
+            view: View::Dashboard,
             selected: 0,
+            settings_selected: 0,
+            pending: None,
             loading: true,
             running: true,
         }
@@ -46,10 +99,11 @@ pub async fn run_loop<B: Backend>(terminal: &mut Terminal<B>, cfg: &Config) -> R
     let mut app = App::new(cfg.clone());
     app.push_log("dune-ctl started");
 
-    refresh(&mut app).await;
+    start_refresh(&mut app);
     let mut last_poll = Instant::now();
 
     while app.running {
+        finish_refresh(&mut app).await;
         terminal.draw(|f| ui::draw(f, &app))?;
 
         if event::poll(EVENT_TIMEOUT)? {
@@ -59,28 +113,77 @@ pub async fn run_loop<B: Backend>(terminal: &mut Terminal<B>, cfg: &Config) -> R
         }
 
         if last_poll.elapsed() >= POLL_INTERVAL {
-            refresh(&mut app).await;
+            start_refresh(&mut app);
             last_poll = Instant::now();
         }
     }
     Ok(())
 }
 
-async fn refresh(app: &mut App) {
+fn start_refresh(app: &mut App) {
+    if app.refresh_task.is_some() {
+        return;
+    }
     app.loading = true;
-    match HealthSnapshot::collect(&app.cfg).await {
-        Ok(snap) => {
+    let cfg = app.cfg.clone();
+    app.refresh_task = Some(tokio::spawn(async move {
+        let snap = HealthSnapshot::collect(&cfg).await?;
+        let settings = settings::list(&cfg).await.unwrap_or_default();
+        Ok((snap, settings))
+    }));
+}
+
+async fn finish_refresh(app: &mut App) {
+    if !app
+        .refresh_task
+        .as_ref()
+        .map(|task| task.is_finished())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let Some(task) = app.refresh_task.take() else {
+        return;
+    };
+
+    match task.await {
+        Ok(Ok((snap, settings))) => {
+            let map_len = snap.maps.len();
+            if app.selected >= map_len {
+                app.selected = map_len.saturating_sub(1);
+            }
+            if app.settings_selected >= settings.len() {
+                app.settings_selected = settings.len().saturating_sub(1);
+            }
+            app.settings = settings;
             app.snapshot = Some(snap);
             app.loading = false;
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             app.push_log(format!("refresh error: {:#}", e));
+            app.loading = false;
+        }
+        Err(e) => {
+            app.push_log(format!("refresh task error: {}", e));
             app.loading = false;
         }
     }
 }
 
 async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
+    if app.pending.is_some() {
+        match code {
+            KeyCode::Char('y') | KeyCode::Enter => execute_pending(app).await,
+            KeyCode::Char('n') | KeyCode::Esc => {
+                app.push_log("action cancelled");
+                app.pending = None;
+            }
+            _ => {}
+        }
+        return;
+    }
+
     let map_count = app.snapshot.as_ref().map(|s| s.maps.len()).unwrap_or(0);
     match code {
         KeyCode::Char('q') | KeyCode::Esc => {
@@ -89,14 +192,59 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
             app.running = false;
         }
-        KeyCode::Down | KeyCode::Char('j') => {
-            if map_count > 0 {
+        KeyCode::Tab => {
+            app.view = match app.view {
+                View::Dashboard => View::Maps,
+                View::Maps => View::Settings,
+                View::Settings => View::Dashboard,
+            };
+        }
+        KeyCode::Char('1') => {
+            app.view = View::Dashboard;
+        }
+        KeyCode::Char('2') => {
+            app.view = View::Maps;
+        }
+        KeyCode::Char('3') => {
+            app.view = View::Settings;
+        }
+        KeyCode::Char('A') => {
+            app.pending = Some(PendingAction::StartBattlegroup);
+        }
+        KeyCode::Char('Z') => {
+            app.pending = Some(PendingAction::StopBattlegroup);
+        }
+        KeyCode::Char('R') => {
+            app.pending = Some(PendingAction::RestartBattlegroup);
+        }
+        KeyCode::Down | KeyCode::Char('j') => match app.view {
+            View::Settings if !app.settings.is_empty() => {
+                app.settings_selected = (app.settings_selected + 1) % app.settings.len();
+            }
+            _ if map_count > 0 => {
+                app.view = View::Maps;
                 app.selected = (app.selected + 1) % map_count;
             }
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            if map_count > 0 && app.selected > 0 {
+            _ => {}
+        },
+        KeyCode::Up | KeyCode::Char('k') => match app.view {
+            View::Settings if !app.settings.is_empty() && app.settings_selected > 0 => {
+                app.settings_selected -= 1;
+            }
+            _ if map_count > 0 && app.selected > 0 => {
+                app.view = View::Maps;
                 app.selected -= 1;
+            }
+            _ => {}
+        },
+        KeyCode::Char('t') => {
+            if app.view == View::Settings {
+                toggle_selected_setting(app).await;
+            }
+        }
+        KeyCode::Char('a') => {
+            if app.view == View::Settings {
+                app.pending = Some(PendingAction::ApplySettings);
             }
         }
         KeyCode::Char('s') => {
@@ -105,7 +253,7 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 match maps::start(&app.cfg, &name).await {
                     Ok(()) => {
                         app.push_log(format!("{}: start triggered", name));
-                        refresh(app).await;
+                        start_refresh(app);
                     }
                     Err(e) => app.push_log(format!("start error: {:#}", e)),
                 }
@@ -117,7 +265,7 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 match maps::stop(&app.cfg, &name).await {
                     Ok(()) => {
                         app.push_log(format!("{}: stop triggered", name));
-                        refresh(app).await;
+                        start_refresh(app);
                     }
                     Err(e) => app.push_log(format!("stop error: {:#}", e)),
                 }
@@ -133,12 +281,56 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         }
         KeyCode::Char('r') => {
             app.push_log("refreshing...");
-            refresh(app).await;
+            start_refresh(app);
         }
         _ => {}
     }
 }
 
+async fn execute_pending(app: &mut App) {
+    let Some(action) = app.pending.take() else {
+        return;
+    };
+    app.push_log(format!("confirming {}...", action.label()));
+    let result = match action {
+        PendingAction::StartBattlegroup => battlegroup::start(&app.cfg).await,
+        PendingAction::StopBattlegroup => battlegroup::stop(&app.cfg).await,
+        PendingAction::RestartBattlegroup => battlegroup::restart(&app.cfg).await,
+        PendingAction::ApplySettings => settings::apply(&app.cfg).await,
+    };
+    match result {
+        Ok(()) => {
+            app.push_log(format!("{} triggered", action.label()));
+            start_refresh(app);
+        }
+        Err(e) => app.push_log(format!("{} error: {:#}", action.label(), e)),
+    }
+}
+
+async fn toggle_selected_setting(app: &mut App) {
+    let Some(item) = app.settings.get(app.settings_selected) else {
+        app.push_log("no setting selected");
+        return;
+    };
+    if !settings::is_bool(item.def.kind) {
+        app.push_log(format!("{} is not a boolean setting", item.def.key));
+        return;
+    }
+    let key = item.def.key;
+    app.push_log(format!("toggling {}...", key));
+    match settings::toggle(&app.cfg, key).await {
+        Ok(value) => {
+            app.push_log(format!("{} toggled to {}", key, value));
+            start_refresh(app);
+        }
+        Err(e) => app.push_log(format!("settings toggle error: {:#}", e)),
+    }
+}
+
 fn selected_map(app: &App) -> Option<String> {
-    app.snapshot.as_ref()?.maps.get(app.selected).map(|m| m.name.clone())
+    app.snapshot
+        .as_ref()?
+        .maps
+        .get(app.selected)
+        .map(|m| m.name.clone())
 }

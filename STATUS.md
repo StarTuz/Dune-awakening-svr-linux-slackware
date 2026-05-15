@@ -1,6 +1,6 @@
 # Dune Server Setup — Status
 
-Last updated: 2026-05-14 — Security hardening complete; FLS browser visible
+Last updated: 2026-05-15 — Hagga Basin travel fixed; stale nft firewalld table removed
 
 ## Current state ✅
 
@@ -13,7 +13,7 @@ Last updated: 2026-05-14 — Security hardening complete; FLS browser visible
 | funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | postgres, rabbitmq, gateway, director, text-router, filebrowser | Running |
 | funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | Survival_1 | Running (~3.3 Gi RSS, 5 Gi req / 12 Gi limit) |
 | funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | Overmap | Running (~165 Mi RSS, 200 Mi req / 1 Gi limit, swap-backed) |
-| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | DeepDesert_1 | **Stopped** (ServerSetScale=0 after last restart — start with `map-toggle.sh start DeepDesert_1`) |
+| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | DeepDesert_1 | Stopped cleanly (BattleGroup CR replicas=0, ServerSetScale=0) |
 
 Battlegroup: `sh-db3533a2d5a25fb-xyyxbx` ("Slackware-Arrakis"), Phase: Healthy
 
@@ -168,11 +168,39 @@ sudo firewall-cmd --reload
 Any other LAN client that wants to connect needs the same rule (or equivalent
 iptables/nftables OUTPUT DNAT). The rule is permanent and survives reboots.
 
+## Hagga Basin travel timeout — root cause and status
+
+**Symptom**: Player gets P34 timeout entering Hagga Basin (Survival_1) after the tutorial.
+
+**Root cause (found 2026-05-15)**: arrakis had a stale nftables `table inet firewalld` active while firewalld was configured for `FirewallBackend=iptables`. The correct iptables firewalld rules allowed Dune UDP `7782-7790`, but the stale nft firewalld input hook still rejected incoming client packets with `ICMP admin prohibited`.
+
+**Confirmed evidence**:
+
+- `tcpdump -ni any 'host 192.168.254.17 and (udp port 7783 or icmp)'` showed client UDP reaching `192.168.254.200:7783`.
+- The same capture showed arrakis replying with `ICMP host 192.168.254.200 unreachable - admin prohibited filter`.
+- `iptables-save` showed the iptables firewalld path accepted LAN traffic via `IN_trusted`.
+- `nft list tables` still showed `table inet firewalld`, and `nft list ruleset -a` showed stale nft firewalld input chains ending in `reject with icmpx admin-prohibited`.
+- After `nft delete table inet firewalld`, tcpdump immediately showed two-way UDP traffic and the player loaded into Hagga Basin.
+
+**Fix applied**:
+
+```sh
+nft delete table inet firewalld
+firewall-cmd --reload
+```
+
+`/etc/firewalld/firewalld.conf` has `FirewallBackend=iptables`. After `firewall-cmd --reload`, `nft list tables` no longer shows `table inet firewalld`, so the stale table did not return.
+
+**Do not use the old S2S-window workaround**: `scripts/s2s-watchdog.sh` was removed. The previous theory that players had to connect during a short Farm-session window was wrong for this incident.
+
+**Related cleanup**: DeepDesert_1 was also corrected to a clean stopped state (`BattleGroup replicas=0`, `ServerSetScale=0`). The previous split state (`replicas=1`, `ServerSetScale=0`) caused confusing farm-size/partition-8 noise in logs and should not be treated as normal.
+
 ## What still needs doing
 
 - [x] ~~Server browser visibility~~ — resolved 2026-05-14, "Slackware-Arrakis" visible in EXPERIMENTAL list
 - [x] ~~Security hardening~~ — resolved 2026-05-14; see above
 - [ ] Re-apply gateway patch after every restart: `~/dune-server/scripts/gateway-patch.sh`
+- [ ] If travel times out again, first check for stale nft firewalld state: `nft list tables` must not show `table inet firewalld`
 - [ ] Confirm motherboard swap outcome (64 GB recognised?) — reboot and verify with `free -h`
 - [ ] After board swap: raise Overmap request back to its natural limit (remove 200 Mi swap patch via `experimental_swap.sh`)
 - [ ] Set up backup jobs writing to `/srv/backups/dune/` and `/srv/backups/conan/`

@@ -1,11 +1,19 @@
 use anyhow::Result;
 
-use crate::{battlegroup, config::Config, fls};
+use crate::{battlegroup, config::Config, diagnostics, fls, gateway};
 
 #[derive(Debug, Clone)]
 pub struct HealthSnapshot {
     pub battlegroup_phase: String,
+    pub battlegroup_title: Option<String>,
+    pub battlegroup_stopped: bool,
+    pub battlegroup_size: Option<u32>,
+    pub battlegroup_started_at: Option<String>,
     pub maps: Vec<battlegroup::MapEntry>,
+    pub utilities: Vec<battlegroup::UtilityStatus>,
+    pub runtime_servers: Vec<battlegroup::RuntimeServer>,
+    pub gateway: Option<gateway::GatewayStatus>,
+    pub diagnostics: diagnostics::DiagnosticsSnapshot,
     pub fls: Option<fls::FlsTokenStatus>,
     pub ram_used_bytes: Option<u64>,
     pub ram_total_bytes: Option<u64>,
@@ -14,14 +22,24 @@ pub struct HealthSnapshot {
 impl HealthSnapshot {
     pub async fn collect(cfg: &Config) -> Result<Self> {
         let mut bg = battlegroup::status(cfg).await?;
-        battlegroup::enrich_phases(cfg, &mut bg.maps).await?;
+        battlegroup::enrich_maps(cfg, &mut bg.maps).await?;
 
         let fls_status = fls::check(cfg).await.ok();
+        let gateway_status = gateway::status(cfg).await.ok();
+        let diagnostics = diagnostics::DiagnosticsSnapshot::collect().await;
         let (ram_used, ram_total) = read_meminfo().await;
 
         Ok(Self {
             battlegroup_phase: bg.phase,
+            battlegroup_title: bg.title,
+            battlegroup_stopped: bg.stop,
+            battlegroup_size: bg.size,
+            battlegroup_started_at: bg.start_timestamp,
             maps: bg.maps,
+            utilities: bg.utilities,
+            runtime_servers: bg.runtime_servers,
+            gateway: gateway_status,
+            diagnostics,
             fls: fls_status,
             ram_used_bytes: ram_used,
             ram_total_bytes: ram_total,

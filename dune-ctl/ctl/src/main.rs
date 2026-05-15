@@ -9,7 +9,11 @@ use clap::Parser;
 use dune_ctl_core::config::Config;
 
 #[derive(Parser)]
-#[command(name = "dune-ctl", about = "Dune: Awakening server management", version)]
+#[command(
+    name = "dune-ctl",
+    about = "Dune: Awakening server management",
+    version
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<cli::Command>,

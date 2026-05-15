@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repository Is
 
-Operations repository for a Dune: Awakening self-hosted battlegroup running natively on Slackware Linux, co-hosted with an existing Conan Exiles Enhanced server. `README.md` is an early research snapshot; `STATUS.md` is the current authoritative state.
+Operations repository for a Dune: Awakening self-hosted battlegroup running natively on Slackware Linux, co-hosted with an existing Conan Exiles Enhanced server. `README.md` is the quick operations overview, `ARCHITECTURE.md` describes the stable system shape, `FILE-LOCATIONS.md` indexes important paths, and `STATUS.md` is the current authoritative state.
 
-**Current state**: Fully running as of 2026-05-13; security hardening applied 2026-05-14. Survival_1, Overmap, and DeepDesert_1 are all up. Total game server RSS ~4.4 Gi — fits in available RAM with no meaningful swap pressure. Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB (zram + dune-vg SSD + sdc1) available as headroom. VPA recommender live (Off mode, memory only). Motherboard replacement to 64 GB pending. FLS token expires 2027-05-08 — rotate by 2027-04-08.
+**Current state**: Fully running; security hardening applied 2026-05-14; Hagga Basin travel fixed 2026-05-15. Survival_1 and Overmap are running. DeepDesert_1 is cleanly stopped unless explicitly started with `map-toggle.sh`. Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB (zram + dune-vg SSD + sdc1) available as headroom. VPA recommender live (Off mode, memory only). Motherboard replacement to 64 GB pending. FLS token expires 2027-05-08 — rotate by 2027-04-08.
 
 ---
 
@@ -90,6 +90,11 @@ BattleGroup CR
 ### Windows vs our deployment
 
 Funcom's Windows depot (3104831) ships a pre-built Hyper-V VM (`.vhdx` + `.vmcx`) running Alpine Linux with k3s inside. `battlegroup.bat` → PowerShell UI → SSH into VM → same Funcom scripts. Our deployment skips the Hyper-V layer and runs k3s directly on Slackware.
+
+The live k3s/kubectl client is currently `v1.36.0+k3s1`, which is likely newer
+than the versions assumed by some older examples or Funcom VM-era notes. Before
+working around an apparent Kubernetes limitation, check the live API behavior;
+newer k3s may already support cleaner approaches.
 
 ---
 
@@ -185,7 +190,27 @@ Two zones:
 
 Custom service XMLs live in `/etc/firewalld/services/`. **Zone XML files must begin with `<?xml` as the very first byte** — leading whitespace causes `INVALID_SERVICE: XML or text declaration not at start of entity`. Verify with `head -c1 /etc/firewalld/zones/public.xml | xxd -p` (must output `3c`).
 
-After editing XML files, do a full stop+start (not `--reload`) to pick up the changes: `sudo /etc/rc.d/rc.firewalld stop && sudo /etc/rc.d/rc.firewalld start`.
+After editing XML files, run `sudo firewall-cmd --reload` and verify the generated iptables rules. If firewalld reports XML parsing errors or stale state persists, do a full stop+start: `sudo /etc/rc.d/rc.firewalld stop && sudo /etc/rc.d/rc.firewalld start`.
+
+### stale nft firewalld table failure mode
+
+Hagga Basin travel timed out on 2026-05-15 because a stale nftables `table inet firewalld` remained active while firewalld was configured for the iptables backend. The iptables firewalld rules correctly allowed Dune UDP `7782-7790`, but the stale nft firewalld input hook rejected client packets with `ICMP admin prohibited`.
+
+Diagnosis:
+
+```sh
+tcpdump -ni any 'host 192.168.254.17 and (udp port 7783 or icmp)'
+nft list tables
+```
+
+If `tcpdump` shows `ICMP ... admin prohibited` and `nft list tables` includes `table inet firewalld` while `FirewallBackend=iptables`, remove the stale nft table:
+
+```sh
+nft delete table inet firewalld
+firewall-cmd --reload
+```
+
+After the fix, `nft list tables` should not show `table inet firewalld`, and `tcpdump` should show two-way UDP between the client and the active Survival_1 port.
 
 ### SSH
 
@@ -296,8 +321,9 @@ sudo kubectl get vpa -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
 ## Boot Sequence (after reboot)
 
 `/etc/rc.d/rc.local` starts automatically:
-1. QEMU guest agent
-2. `memory-focused-scheduler` daemon
+1. firewalld
+2. QEMU guest agent
+3. `memory-focused-scheduler` daemon
 
 Then manually (or add to rc.local for fully automatic):
 ```sh
@@ -318,7 +344,7 @@ All 28 maps defined in the BattleGroup CR. Observed RSS values from 2026-05-13 (
 | Map | Limit | Request | Observed RSS | Notes |
 |---|---|---|---|---|
 | `Survival_1` | 12 Gi | 5 Gi | ~3.3 Gi | Main world — always on |
-| `DeepDesert_1` | 10 Gi | 3 Gi | ~954 Mi | Running; fits in RAM at this usage |
+| `DeepDesert_1` | 10 Gi | 3 Gi | ~954 Mi | Stopped by default; start only with `map-toggle.sh` |
 | `Overmap` | 1 Gi | 200 Mi | ~165 Mi | Running; swap-backed by request |
 | `SH_Arrakeen` | 1 Gi | 200 Mi | — | Stopped |
 | `SH_HarkoVillage` | 1 Gi | 200 Mi | — | Stopped |
@@ -343,8 +369,9 @@ Official Funcom tiers (from `initial-setup.ps1`):
 | 40 GB | Hagga Basin + Story/Social + Deep Desert (full) |
 
 Funcom's tiers assume full player load. In practice with a single user:
-- Survival_1 + DeepDesert_1 + Overmap together used ~4.4 Gi RSS — well within the ~6.5 Gi free after Conan on 16 GB RAM.
+- Survival_1 + Overmap are the normal low-footprint set. Survival_1 + DeepDesert_1 + Overmap together previously used ~4.4 Gi RSS with one user, but DeepDesert must be cleanly started/stopped through `map-toggle.sh`.
 - Experimental swap lowers *requests* so Kubernetes schedules pods against available RAM + swap headroom. The gap between request and actual RSS is wide for all maps so far.
+- Do not rely on older blanket claims that k3s/Kubernetes cannot use swap. This host is running a modern k3s client (`v1.36.0+k3s1`) on Slackware with cgroup v1 memory+memsw accounting, zram, and disk-backed swap. Judge swap behavior from live evidence: `swapon --show`, cgroup settings, scheduling behavior, RSS, and actual swap pressure.
 
 Per-map Kubernetes limits and requests (from `experimental_swap.sh`):
 

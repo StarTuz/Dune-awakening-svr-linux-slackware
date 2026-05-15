@@ -1,16 +1,23 @@
 use anyhow::{Context, Result};
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::process::Command;
+
+const KUBECTL_TIMEOUT: Duration = Duration::from_secs(12);
 
 /// Run `sudo kubectl <args>` and return stdout as a String.
 pub async fn run(args: &[&str]) -> Result<String> {
-    let output = Command::new("sudo")
+    let child = Command::new("sudo")
+        .arg("-n")
         .arg("kubectl")
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .output();
+
+    let output = tokio::time::timeout(KUBECTL_TIMEOUT, child)
         .await
+        .map_err(|_| anyhow::anyhow!("kubectl {} timed out", args.join(" ")))?
         .context("failed to spawn kubectl")?;
 
     if !output.status.success() {

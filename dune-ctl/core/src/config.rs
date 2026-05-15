@@ -54,4 +54,15 @@ impl Config {
             scripts_dir: PathBuf::from("/home/dune/dune-server/scripts"),
         }
     }
+
+    pub fn repo_root(&self) -> PathBuf {
+        self.scripts_dir
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/home/dune/dune-server"))
+    }
+
+    pub fn user_settings_dir(&self) -> PathBuf {
+        self.repo_root().join("server/scripts/setup/config")
+    }
 }

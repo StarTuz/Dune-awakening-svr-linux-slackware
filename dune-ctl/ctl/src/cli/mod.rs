@@ -1,6 +1,9 @@
 use anyhow::Result;
 use clap::Subcommand;
-use dune_ctl_core::{config::Config, fls::FlsTokenState, gateway, health::HealthSnapshot, maps, update};
+use dune_ctl_core::{
+    battlegroup, config::Config, diagnostics::CheckState, fls::FlsTokenState, gateway,
+    health::HealthSnapshot, maps, settings, update,
+};
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -11,6 +14,18 @@ pub enum Command {
         #[command(subcommand)]
         action: MapsCommand,
     },
+    /// Battlegroup lifecycle management
+    Battlegroup {
+        #[command(subcommand)]
+        action: BattlegroupCommand,
+    },
+    /// Inspect and edit local UserEngine.ini/UserGame.ini settings
+    Settings {
+        #[command(subcommand)]
+        action: SettingsCommand,
+    },
+    /// Run local deployment diagnostics
+    Diagnostics,
     /// Run full update pipeline (steamcmd + funcom-patches + gateway-patch)
     Update,
     /// Re-apply --RMQGameHttpPort=30196 to the gateway Deployment
@@ -34,10 +49,37 @@ pub enum MapsCommand {
     Stop { name: String },
 }
 
+#[derive(Subcommand)]
+pub enum BattlegroupCommand {
+    /// Start the battlegroup
+    Start,
+    /// Stop the battlegroup
+    Stop,
+    /// Restart the battlegroup
+    Restart,
+}
+
+#[derive(Subcommand)]
+pub enum SettingsCommand {
+    /// List managed settings and current local values
+    List,
+    /// Set a managed setting in the local config files
+    Set { key: String, value: String },
+    /// Toggle a boolean managed setting in the local config files
+    Toggle { key: String },
+    /// Compare local config files to the deployed UserSettings copy
+    Diff,
+    /// Deploy local UserEngine.ini/UserGame.ini to the filebrowser UserSettings path
+    Apply,
+}
+
 pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
     match cmd {
         Command::Status => cmd_status(cfg).await,
         Command::Maps { action } => cmd_maps(action, cfg).await,
+        Command::Battlegroup { action } => cmd_battlegroup(action, cfg).await,
+        Command::Settings { action } => cmd_settings(action, cfg).await,
+        Command::Diagnostics => cmd_diagnostics(cfg).await,
         Command::Update => cmd_update(cfg).await,
         Command::GatewayPatch => cmd_gateway_patch(cfg).await,
         Command::TokenCheck => cmd_token_check(cfg).await,
@@ -45,10 +87,102 @@ pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
     }
 }
 
+async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
+    match action {
+        SettingsCommand::List => {
+            let values = settings::list(cfg).await?;
+            println!(
+                "{:<28} {:<12} {:<8} {:<6} Label",
+                "Key", "Value", "File", "Type"
+            );
+            println!("{}", "-".repeat(78));
+            for item in values {
+                println!(
+                    "{:<28} {:<12} {:<8} {:<6} {}",
+                    item.def.key,
+                    item.value.unwrap_or_else(|| "—".to_string()),
+                    item.def.file.label(),
+                    settings::kind_label(item.def.kind),
+                    item.def.label
+                );
+            }
+        }
+        SettingsCommand::Set { key, value } => {
+            settings::set(cfg, &key, &value).await?;
+            println!(
+                "{} updated locally. Run `dune-ctl settings apply` to deploy.",
+                key
+            );
+        }
+        SettingsCommand::Toggle { key } => {
+            let value = settings::toggle(cfg, &key).await?;
+            println!(
+                "{} toggled to {} locally. Run `dune-ctl settings apply` to deploy.",
+                key, value
+            );
+        }
+        SettingsCommand::Diff => {
+            print!("{}", settings::diff(cfg).await?);
+        }
+        SettingsCommand::Apply => {
+            settings::apply(cfg).await?;
+            println!("UserEngine.ini and UserGame.ini deployed to /srv/UserSettings.");
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_battlegroup(action: BattlegroupCommand, cfg: &Config) -> Result<()> {
+    match action {
+        BattlegroupCommand::Start => {
+            battlegroup::start(cfg).await?;
+            println!("Battlegroup start triggered.");
+        }
+        BattlegroupCommand::Stop => {
+            battlegroup::stop(cfg).await?;
+            println!("Battlegroup stop triggered.");
+        }
+        BattlegroupCommand::Restart => {
+            battlegroup::restart(cfg).await?;
+            println!("Battlegroup restart triggered.");
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_diagnostics(cfg: &Config) -> Result<()> {
+    let snap = HealthSnapshot::collect(cfg).await?;
+    println!("Diagnostics for {}", cfg.battlegroup);
+    print_check("firewall backend", &snap.diagnostics.firewall_backend);
+    print_check("stale nft firewalld", &snap.diagnostics.stale_nft_firewalld);
+    if let Some(gw) = &snap.gateway {
+        println!(
+            "{:<22} {}",
+            "gateway patch",
+            if gw.patched { "ok" } else { "missing" }
+        );
+    }
+    println!("nft tables: {}", snap.diagnostics.nft_tables.join(", "));
+    Ok(())
+}
+
+fn print_check(label: &str, check: &dune_ctl_core::diagnostics::Check) {
+    let prefix = match check.state {
+        CheckState::Ok => "ok",
+        CheckState::Warning => "warn",
+        CheckState::Critical => "critical",
+        CheckState::Unknown => "unknown",
+    };
+    println!("{:<22} {:<8} {}", label, prefix, check.message);
+}
+
 async fn cmd_status(cfg: &Config) -> Result<()> {
     let snap = HealthSnapshot::collect(cfg).await?;
 
-    println!("Battlegroup : {}  Phase: {}", cfg.battlegroup, snap.battlegroup_phase);
+    println!(
+        "Battlegroup : {}  Phase: {}",
+        cfg.battlegroup, snap.battlegroup_phase
+    );
 
     if let Some(fls) = &snap.fls {
         println!(
@@ -58,7 +192,11 @@ async fn cmd_status(cfg: &Config) -> Result<()> {
         );
     }
     if let (Some(used), Some(total)) = (snap.ram_used_bytes, snap.ram_total_bytes) {
-        println!("RAM         : {:.1} / {:.1} GB", used as f64 / 1e9, total as f64 / 1e9);
+        println!(
+            "RAM         : {:.1} / {:.1} GB",
+            used as f64 / 1e9,
+            total as f64 / 1e9
+        );
     }
 
     println!();
@@ -66,7 +204,10 @@ async fn cmd_status(cfg: &Config) -> Result<()> {
     println!("{}", "-".repeat(50));
     for map in &snap.maps {
         let dot = if map.phase == "Running" { "●" } else { "○" };
-        println!("{} {:<30} {:<12} {}", dot, map.name, map.phase, map.replicas);
+        println!(
+            "{} {:<30} {:<12} {}",
+            dot, map.name, map.phase, map.replicas
+        );
     }
     Ok(())
 }
@@ -119,7 +260,10 @@ async fn cmd_token_check(cfg: &Config) -> Result<()> {
     match status.state {
         FlsTokenState::Ok => {}
         FlsTokenState::WarningSoon => {
-            eprintln!("WARNING: {} days until expiry — rotate token by 2026-08-20.", status.days_remaining);
+            eprintln!(
+                "WARNING: {} days until expiry — rotate token by 2026-08-20.",
+                status.days_remaining
+            );
         }
         FlsTokenState::Critical => {
             eprintln!("CRITICAL: {} days until expiry!", status.days_remaining);

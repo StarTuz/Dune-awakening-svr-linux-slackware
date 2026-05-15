@@ -43,13 +43,16 @@ struct JwtPayload {
 pub fn decode(jwt: &str) -> Result<FlsTokenStatus> {
     let parts: Vec<&str> = jwt.splitn(3, '.').collect();
     if parts.len() != 3 {
-        anyhow::bail!("invalid JWT: expected 3 dot-separated parts, got {}", parts.len());
+        anyhow::bail!(
+            "invalid JWT: expected 3 dot-separated parts, got {}",
+            parts.len()
+        );
     }
     let payload_bytes = URL_SAFE_NO_PAD
         .decode(parts[1])
         .context("failed to base64url-decode JWT payload")?;
-    let claims: JwtPayload = serde_json::from_slice(&payload_bytes)
-        .context("failed to parse JWT payload JSON")?;
+    let claims: JwtPayload =
+        serde_json::from_slice(&payload_bytes).context("failed to parse JWT payload JSON")?;
 
     let expires_at = DateTime::from_timestamp(claims.exp, 0)
         .ok_or_else(|| anyhow::anyhow!("JWT exp out of range: {}", claims.exp))?;
@@ -62,16 +65,17 @@ pub fn decode(jwt: &str) -> Result<FlsTokenStatus> {
         _ => FlsTokenState::Ok,
     };
 
-    Ok(FlsTokenStatus { expires_at, days_remaining, state })
+    Ok(FlsTokenStatus {
+        expires_at,
+        days_remaining,
+        state,
+    })
 }
 
 /// Pull the FLS JWT from the live BattleGroup CR and decode it.
 pub async fn check(cfg: &Config) -> Result<FlsTokenStatus> {
-    let bg = kubectl::get_json(&[
-        "get", "battlegroup", &cfg.battlegroup,
-        "-n", &cfg.namespace,
-    ])
-    .await?;
+    let bg =
+        kubectl::get_json(&["get", "battlegroup", &cfg.battlegroup, "-n", &cfg.namespace]).await?;
 
     let token = extract_jwt(&bg)
         .ok_or_else(|| anyhow::anyhow!("FLS JWT not found in BattleGroup CR args"))?;
