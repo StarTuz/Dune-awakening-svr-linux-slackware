@@ -17,6 +17,11 @@ Last updated: 2026-05-15 — Hagga Basin travel fixed; stale nft firewalld table
 
 Battlegroup: `sh-db3533a2d5a25fb-xyyxbx` ("Slackware-Arrakis"), Phase: Healthy
 
+Security audit state:
+
+- `~/dune-server/scripts/security-audit.sh` reports the expected public Dune/RMQ ports only.
+- Director, Filebrowser, Postgres, k3s API, and RabbitMQ admin ports stay private behind the host firewall.
+
 ## FLS server browser ✅ visible (as of 2026-05-14)
 
 "Slackware-Arrakis" appears in the EXPERIMENTAL browser tab with "Arrakis-SlackwareLinux" (password-protected) below it. The "0 ms" ping shown is a Funcom-side display anomaly affecting every server in the list, not specific to ours.

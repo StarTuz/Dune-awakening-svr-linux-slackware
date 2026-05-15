@@ -118,6 +118,10 @@ Recommended restore procedure:
    ~/dune-server/scripts/gateway-patch.sh
    ```
 
+   If you are resuming a completed update rather than doing a manual restore,
+   `~/dune-server/scripts/update.sh --post-update-only --start-after` now wraps
+   the same DB check, battlegroup start, and gateway patch sequence.
+
 6. Verify with:
 
    ```sh

@@ -124,6 +124,7 @@ newer k3s may already support cleaner approaches.
 | `map-toggle.sh` | Start/stop individual maps; handles the full BattleGroup CR + ServerSetScale chain |
 | `update.sh` | Full update flow: steamcmd pre-fetch with `validate`, re-apply funcom patches, run Funcom update, re-apply gateway patch |
 | `gateway-patch.sh` | Apply `--RMQGameHttpPort=30196` to gateway Deployment (idempotent; re-run after every restart) |
+| `security-audit.sh` | Check for accidental public exposure of sensitive services and NodePorts |
 | `funcom-patches.sh` | Re-apply Slackware patches to Funcom-shipped scripts after SteamCMD overwrites (uses baselines in `funcom-patches/`) |
 | `funcom-patches/` | Patched copies of Funcom scripts + `.upstream` baselines for drift detection |
 | `port-preempt.py` | Hold UDP 7779-7781 to prevent Dune game servers from binding ports owned by Path of Titans on the router |
@@ -192,6 +193,8 @@ Custom service XMLs live in `/etc/firewalld/services/`. **Zone XML files must be
 
 After editing XML files, run `sudo firewall-cmd --reload` and verify the generated iptables rules. If firewalld reports XML parsing errors or stale state persists, do a full stop+start: `sudo /etc/rc.d/rc.firewalld stop && sudo /etc/rc.d/rc.firewalld start`.
 
+Run `~/dune-server/scripts/security-audit.sh` when you want a quick host-side exposure check. It flags accidental public exposure of Director, Filebrowser, Postgres, the k3s API, and RabbitMQ admin ports. It also treats the intentionally public `mq-game-svc` ports (`31982` and `30196`) as expected.
+
 ### stale nft firewalld table failure mode
 
 Hagga Basin travel timed out on 2026-05-15 because a stale nftables `table inet firewalld` remained active while firewalld was configured for the iptables backend. The iptables firewalld rules correctly allowed Dune UDP `7782-7790`, but the stale nft firewalld input hook rejected client packets with `ICMP admin prohibited`.
@@ -225,6 +228,11 @@ Only `startux` and `dune` have authorized keys. Keys are RSA-4096 (defiant's Ope
 ### k3s API security — do NOT use bind-address
 
 **Do not add `bind-address: 127.0.0.1` to `/etc/rancher/k3s/config.yaml`.** The Kubernetes `kubernetes` service has a ClusterIP (10.43.0.1) with an Endpoint pointing to the node IP (192.168.254.200:6443). kube-proxy DNATs pod→API traffic to that endpoint. If the API server only listens on 127.0.0.1, nothing answers on 192.168.254.200:6443 and every operator crashes with `connection refused`. The firewall (trusted zone) is sufficient — external API access is blocked without needing bind-address.
+
+### Update flow notes
+
+- `scripts/db-credentials.sh` discovers the live Postgres port from the DatabaseDeployment or service before checking credentials. The old `15432` assumption no longer matches the current operator revision.
+- `scripts/update.sh --post-update-only --start-after` is the resume path after a Funcom update has already completed. It now starts the battlegroup before reapplying the gateway patch, because the gateway deployment is recreated when the battlegroup comes back.
 
 ### FLS JWT token
 
