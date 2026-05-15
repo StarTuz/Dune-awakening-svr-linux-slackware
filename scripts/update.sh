@@ -22,6 +22,7 @@ skip_stop=0
 skip_db_fix=0
 start_after=0
 bgname=""
+steamcmd_path="${STEAMCMD:-}"
 
 usage() {
     cat <<EOF
@@ -29,6 +30,7 @@ Usage: $0 [options]
 
 Options:
   --bg NAME          Battlegroup name without funcom-seabass- prefix
+  --steamcmd PATH    SteamCMD script path. Defaults to /home/<sudo-user>/steamcmd/steamcmd.sh
   --skip-backup      Do not run scripts/dune-backup.sh before updating
   --skip-stop        Do not stop the battlegroup before updating
   --skip-db-fix      Do not run DB credential check/repair after updating
@@ -41,6 +43,10 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --bg)
             bgname="${2:-}"
+            shift 2
+            ;;
+        --steamcmd)
+            steamcmd_path="${2:-}"
             shift 2
             ;;
         --skip-backup)
@@ -104,6 +110,35 @@ patch_stop() {
     sudo kubectl patch battlegroup "$bgname" -n "$ns" --type=merge -p "{\"spec\":{\"stop\":$value}}"
 }
 
+resolve_steamcmd() {
+    if [ -n "$steamcmd_path" ]; then
+        return
+    fi
+
+    local owner="${SUDO_USER:-$USER}"
+    local owner_home=""
+    if command -v getent >/dev/null 2>&1; then
+        owner_home="$(getent passwd "$owner" | cut -d: -f6)"
+    fi
+    if [ -z "$owner_home" ]; then
+        owner_home="/home/$owner"
+    fi
+
+    for candidate in \
+        "$owner_home/steamcmd/steamcmd.sh" \
+        "/home/dune/steamcmd/steamcmd.sh" \
+        "$HOME/steamcmd/steamcmd.sh"; do
+        if [ -x "$candidate" ]; then
+            steamcmd_path="$candidate"
+            return
+        fi
+    done
+
+    echo "ERROR: steamcmd.sh not found." >&2
+    echo "Set it explicitly with: $0 --steamcmd /path/to/steamcmd.sh" >&2
+    exit 1
+}
+
 wait_stopped() {
     local timeout="${1:-300}"
     local elapsed=0
@@ -124,10 +159,12 @@ wait_stopped() {
 }
 
 select_battlegroup
+resolve_steamcmd
 
 echo "=== Dune update target ==="
 echo "Battlegroup: $bgname"
 echo "Namespace:   $ns"
+echo "SteamCMD:    $steamcmd_path"
 
 if [ "$skip_backup" -eq 0 ]; then
     echo ""
@@ -150,7 +187,7 @@ fi
 
 echo ""
 echo "=== Pre-fetching with validate (works around revoked PTC manifests) ==="
-~/steamcmd/steamcmd.sh +force_install_dir "$DOWNLOAD_PATH" \
+"$steamcmd_path" +force_install_dir "$DOWNLOAD_PATH" \
     +login anonymous +app_update 3104830 validate +quit
 
 echo ""
