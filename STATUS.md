@@ -111,7 +111,10 @@ been refreshed with those entries.
 
 2026-05-15 update wrapper note: after a BattleGroup image patch, the DB pod may
 exist before Postgres is listening. `db-credentials.sh` now waits for
-`pg_isready` before deciding whether credentials are actually broken.
+`pg_isready` before deciding whether credentials are actually broken. The
+updated operator may also expose Postgres on `5432`; the guard discovers the
+live port from the DatabaseDeployment/status/service instead of assuming the
+older `15432` value.
 
 ## RAM picture
 

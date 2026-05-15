@@ -57,6 +57,7 @@ sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db353
 ~/dune-server/scripts/gateway-patch.sh
 ~/dune-server/scripts/update.sh
 ~/dune-server/scripts/update.sh --skip-backup --skip-stop --start-after  # resume after backup+stop already completed
+~/dune-server/scripts/update.sh --post-update-only --start-after          # resume after Funcom update completed
 ~/dune-server/scripts/db-credentials.sh check
 
 # Maps

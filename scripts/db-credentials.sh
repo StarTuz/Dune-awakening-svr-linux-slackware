@@ -7,10 +7,9 @@ usage() {
     cat <<EOF
 Usage: $0 <check|fix|patch-spec> [--bg NAME]
 
-Checks or repairs the expected Dune Postgres credentials. Funcom's current
-database utility scripts still pass:
-
-  --user=dune --password=dune --admin-user=postgres --admin-password=postgres
+Checks or repairs the expected Dune Postgres credentials using the live
+BattleGroup/DatabaseDeployment specs. The updated operator may expose Postgres
+on port 5432 even if older local assumptions expected 15432.
 
 Commands:
   check       Verify both dune and postgres can authenticate.
@@ -103,10 +102,46 @@ jsonpath_or_default() {
     fi
 }
 
+kubectl_jsonpath() {
+    local resource="$1"
+    local path="$2"
+    sudo kubectl get "$resource" -n "$ns" -o "jsonpath=$path" 2>/dev/null || true
+}
+
 find_db_pod() {
     sudo kubectl get pods -n "$ns" --no-headers -o custom-columns=NAME:.metadata.name \
         | grep -- '-db-dbdepl-sts-' \
         | head -n1
+}
+
+find_dbdepl() {
+    sudo kubectl get databasedeployments -n "$ns" --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null \
+        | head -n1
+}
+
+discover_db_port() {
+    local port=""
+
+    if [ -n "$dbdepl" ]; then
+        port="$(kubectl_jsonpath "databasedeployment/$dbdepl" '{.spec.port}')"
+        if [ -z "$port" ]; then
+            port="$(kubectl_jsonpath "databasedeployment/$dbdepl" '{.status.address}' | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p')"
+        fi
+    fi
+
+    if [ -z "$port" ]; then
+        port="$(sudo kubectl get svc -n "$ns" "${bgname}-db-dbdepl-svc" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || true)"
+    fi
+
+    if [ -z "$port" ]; then
+        port="$(jsonpath_or_default '{.spec.database.template.spec.deployment.spec.port}' '')"
+    fi
+
+    if [ -n "$port" ]; then
+        printf '%s' "$port"
+    else
+        printf '5432'
+    fi
 }
 
 psql_exec() {
@@ -151,8 +186,6 @@ patch_specs() {
     sudo kubectl patch battlegroup "$bgname" -n "$ns" --type=merge -p \
         "{\"spec\":{\"database\":{\"template\":{\"spec\":{\"deployment\":{\"spec\":{\"user\":\"$db_user\",\"password\":\"$db_password\",\"superUser\":\"$super_user\",\"superPassword\":\"$super_password\"}}}}}}}"
 
-    local dbdepl
-    dbdepl="$(sudo kubectl get databasedeployments -n "$ns" --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null | head -n1 || true)"
     if [ -n "$dbdepl" ]; then
         echo "Patching DatabaseDeployment credential spec $dbdepl..."
         sudo kubectl patch databasedeployment "$dbdepl" -n "$ns" --type=merge -p \
@@ -190,7 +223,8 @@ db_user="$(jsonpath_or_default '{.spec.database.template.spec.deployment.spec.us
 db_password="$(jsonpath_or_default '{.spec.database.template.spec.deployment.spec.password}' dune)"
 super_user="$(jsonpath_or_default '{.spec.database.template.spec.deployment.spec.superUser}' postgres)"
 super_password="$(jsonpath_or_default '{.spec.database.template.spec.deployment.spec.superPassword}' postgres)"
-db_port="$(jsonpath_or_default '{.spec.database.template.spec.deployment.spec.port}' 15432)"
+dbdepl="$(find_dbdepl)"
+db_port="$(discover_db_port)"
 
 db_pod="$(find_db_pod)"
 if [ -z "$db_pod" ]; then

@@ -333,6 +333,9 @@ The live deployment diverges from Funcom's expected VM in these ways:
   stop, double patch re-application, DB credential verification/repair, and
   gateway patch. This is intentionally more conservative than invoking
   `server/scripts/battlegroup.sh update` directly.
+- Database credential checks discover the live Postgres port from the current
+  DatabaseDeployment/status/service. This matters because the updated operator
+  can listen on `5432` even when older local assumptions expected `15432`.
 
 ## Operational Invariants
 
