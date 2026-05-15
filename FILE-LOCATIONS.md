@@ -128,6 +128,9 @@ With that backend, `nft list tables` should not show `table inet firewalld`.
 | Backup mount | `/srv/backups` |
 | Dune backups | `/srv/backups/dune` |
 | Conan backups | `/srv/backups/conan` |
+| Dune backup wrapper | `scripts/dune-backup.sh` |
+| Backup/restore runbook | `BACKUP-RESTORE.md` |
+| Funcom DB dump staging | `/funcom/artifacts/database-dumps/<battlegroup>` |
 | btrfs root | `/` on `/dev/sdc2` |
 | SSD LVM VG | `dune-vg` on `/dev/sdb2` |
 

@@ -203,7 +203,9 @@ firewall-cmd --reload
 - [ ] If travel times out again, first check for stale nft firewalld state: `nft list tables` must not show `table inet firewalld`
 - [ ] Confirm motherboard swap outcome (64 GB recognised?) — reboot and verify with `free -h`
 - [ ] After board swap: raise Overmap request back to its natural limit (remove 200 Mi swap patch via `experimental_swap.sh`)
-- [ ] Set up backup jobs writing to `/srv/backups/dune/` and `/srv/backups/conan/`
+- [x] Add and verify Dune backup/restore runbook and host backup wrapper — full DB backup succeeded 2026-05-15; see `BACKUP-RESTORE.md` and `scripts/dune-backup.sh`
+- [ ] Schedule Dune backup jobs writing to `/srv/backups/dune/`
+- [ ] Set up Conan backup jobs writing to `/srv/backups/conan/`
 - [ ] Off-server backup strategy (rsync to NAS / rclone to cloud — TBD)
 - [ ] Create `settings.conf` (`printf '\n\n\n47.145.51.160\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
 - [ ] **Rotate FLS token before 2027-04-08** (expires 2027-05-08) — update BattleGroup CR args (28 occurrences) + re-apply gateway patch

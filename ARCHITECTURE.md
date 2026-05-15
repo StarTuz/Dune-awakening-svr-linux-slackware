@@ -278,6 +278,13 @@ Do not edit these directly unless there is a very specific, verified recovery
 plan. Most problems so far have been Kubernetes desired-state or firewall
 state, not DB corruption.
 
+Backups use Funcom's database utility path first. The local wrapper
+`scripts/dune-backup.sh` creates a `DatabaseOperation` dump through
+`server/scripts/battlegroup.sh backup`, then copies the resulting database dump,
+Kubernetes metadata, and UserSettings into `/srv/backups/dune/<battlegroup>/`.
+Restore remains deliberately manual and is documented in `BACKUP-RESTORE.md`
+because database import is destructive.
+
 ## Memory and Scheduling
 
 The host currently has 16 GB RAM plus large swap headroom. Conan uses roughly

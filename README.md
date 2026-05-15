@@ -71,6 +71,9 @@ nft list tables
 free -h
 swapon --show
 ~/dune-server/scripts/vpa/watch-gameservers.sh --once
+
+# Backups
+~/dune-server/scripts/dune-backup.sh
 ```
 
 ## Networking
@@ -94,6 +97,7 @@ server/                  Funcom server package and scripts
 scripts/                 Local Slackware/operations scripts
 scripts/funcom-patches/  Local patches re-applied after SteamCMD updates
 dune-ctl/                Rust control/status tooling
+BACKUP-RESTORE.md        Backup and restore runbook
 STATUS.md                Current operational state
 ARCHITECTURE.md          System architecture and control loops
 FILE-LOCATIONS.md        Important paths and logs
