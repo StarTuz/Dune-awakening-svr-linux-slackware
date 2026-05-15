@@ -101,6 +101,11 @@ automatically.
 
 The Funcom Windows deployment runs `battlegroup.bat` → `battlegroup.ps1` → SSH into VM → `battlegroup.sh update`. Our setup adds backup, stop, `validate` pre-fetch, Slackware patch re-application, DB credential verification/repair, and the gateway patch around that.
 
+2026-05-15 update note: Funcom added three maps to `experimental_swap.sh`
+(`CB_Overland_S_07`, `CB_Overland_S_08`, `CB_Dungeon_ThePit`). The local
+`scripts/funcom-patches/experimental_swap.sh` and `.upstream` baseline have
+been refreshed with those entries.
+
 ## RAM picture
 
 - Physical RAM: 16 GB
