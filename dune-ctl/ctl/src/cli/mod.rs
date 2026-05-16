@@ -102,6 +102,8 @@ pub enum SettingsCommand {
     Set { key: String, value: String },
     /// Toggle a boolean managed setting in the local config files
     Toggle { key: String },
+    /// Summarize local-vs-deployed setting drift
+    Status,
     /// Compare local config files to the deployed UserSettings copy
     Diff,
     /// Deploy local UserEngine.ini/UserGame.ini to the filebrowser UserSettings path
@@ -276,6 +278,32 @@ async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
                 "{} toggled to {} locally. Run `dune-ctl settings apply` to deploy.",
                 key, value
             );
+        }
+        SettingsCommand::Status => {
+            let drift = settings::drift(cfg).await?;
+            let changed = drift.changed_count();
+            if drift.deployed_available {
+                println!("Settings drift: {} changed managed setting(s).", changed);
+            } else {
+                println!("Settings drift: deployed settings unavailable.");
+                if let Some(error) = &drift.error {
+                    println!("Reason: {}", error);
+                }
+            }
+            println!("{:<28} {:<12} {:<12} State", "Key", "Local", "Deployed");
+            println!("{}", "-".repeat(72));
+            for item in drift.items.iter().filter(|item| item.changed()) {
+                println!(
+                    "{:<28} {:<12} {:<12} {}",
+                    item.def.key,
+                    settings::display_drift_local(item),
+                    settings::display_drift_deployed(item),
+                    if item.changed() { "changed" } else { "clean" }
+                );
+            }
+            if changed == 0 && drift.deployed_available {
+                println!("No managed setting drift detected.");
+            }
         }
         SettingsCommand::Diff => {
             print!("{}", settings::diff(cfg).await?);

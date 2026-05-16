@@ -52,6 +52,32 @@ pub struct SettingValue {
     pub value: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct SettingDrift {
+    pub def: SettingDef,
+    pub local: Option<String>,
+    pub deployed: Option<String>,
+}
+
+impl SettingDrift {
+    pub fn changed(&self) -> bool {
+        self.local != self.deployed
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SettingsDrift {
+    pub items: Vec<SettingDrift>,
+    pub deployed_available: bool,
+    pub error: Option<String>,
+}
+
+impl SettingsDrift {
+    pub fn changed_count(&self) -> usize {
+        self.items.iter().filter(|item| item.changed()).count()
+    }
+}
+
 pub const CATALOG: &[SettingDef] = &[
     SettingDef {
         key: "port",
@@ -362,6 +388,53 @@ pub async fn diff(cfg: &Config) -> Result<String> {
     Ok(out)
 }
 
+pub async fn drift(cfg: &Config) -> Result<SettingsDrift> {
+    let pod = filebrowser_pod(cfg).await?;
+    let mut items = Vec::with_capacity(CATALOG.len());
+    let mut deployed_available = true;
+    let mut error = None;
+
+    for file in [SettingsFile::Engine, SettingsFile::Game] {
+        let local = tokio::fs::read_to_string(setting_path(cfg, file))
+            .await
+            .with_context(|| format!("failed to read local {}", file.filename()))?;
+        let deployed = match kubectl::run(&[
+            "exec",
+            "-n",
+            &cfg.namespace,
+            &pod,
+            "--",
+            "cat",
+            &format!("/srv/UserSettings/{}", file.filename()),
+        ])
+        .await
+        {
+            Ok(text) => Some(text),
+            Err(e) => {
+                deployed_available = false;
+                error.get_or_insert_with(|| e.to_string());
+                None
+            }
+        };
+
+        for def in CATALOG.iter().copied().filter(|def| def.file == file) {
+            items.push(SettingDrift {
+                def,
+                local: get_value(&local, def.section, def.ini_key),
+                deployed: deployed
+                    .as_deref()
+                    .and_then(|text| get_value(text, def.section, def.ini_key)),
+            });
+        }
+    }
+
+    Ok(SettingsDrift {
+        items,
+        deployed_available,
+        error,
+    })
+}
+
 pub fn setting_path(cfg: &Config, file: SettingsFile) -> PathBuf {
     cfg.user_settings_dir().join(file.filename())
 }
@@ -374,11 +447,23 @@ pub fn is_bool(kind: ValueKind) -> bool {
 }
 
 pub fn display_value(item: &SettingValue) -> String {
-    let Some(value) = item.value.as_deref() else {
+    display_def_value(&item.def, item.value.as_deref())
+}
+
+pub fn display_drift_local(item: &SettingDrift) -> String {
+    display_def_value(&item.def, item.local.as_deref())
+}
+
+pub fn display_drift_deployed(item: &SettingDrift) -> String {
+    display_def_value(&item.def, item.deployed.as_deref())
+}
+
+pub fn display_def_value(def: &SettingDef, value: Option<&str>) -> String {
+    let Some(value) = value else {
         return "—".to_string();
     };
-    if !item.def.secret {
-        if item.def.kind == ValueKind::QuotedString {
+    if !def.secret {
+        if def.kind == ValueKind::QuotedString {
             let unquoted = unquote_display(value);
             return if unquoted.is_empty() {
                 "—".to_string()

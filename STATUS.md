@@ -187,7 +187,7 @@ All items applied. Details in CLAUDE.md § Security.
 | FLS token expiry tracking | ✅ in dune-ctl (`token-check`); token expires 2027-05-08, rotate by 2027-04-08 |
 | dune-ctl world targeting | ✅ `worlds list`, `--world`, and per-world settings profiles for PTC/official cutover |
 | dune-ctl primary Sietch lifecycle | ✅ `sietches list/start/stop/restart`; start/stop/restart currently map to selected BattleGroup lifecycle |
-| dune-ctl Sietch settings workflow | ✅ TUI shows name/password state; `settings apply-restart` deploys User*.ini then restarts primary Sietch |
+| dune-ctl Sietch settings workflow | ✅ TUI shows name/password state and setting drift; `settings status` summarizes local-vs-deployed changes; `settings apply-restart` deploys User*.ini then restarts primary Sietch |
 
 ## Future official launch cutover
 

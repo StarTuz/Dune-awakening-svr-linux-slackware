@@ -16,13 +16,18 @@ use super::ui;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const EVENT_TIMEOUT: Duration = Duration::from_millis(200);
-type RefreshResult = Result<(HealthSnapshot, Vec<settings::SettingValue>)>;
+type RefreshResult = Result<(
+    HealthSnapshot,
+    Vec<settings::SettingValue>,
+    Option<settings::SettingsDrift>,
+)>;
 
 pub struct App {
     pub cfg: Config,
     pub started_at: Instant,
     pub snapshot: Option<HealthSnapshot>,
     pub settings: Vec<settings::SettingValue>,
+    pub settings_drift: Option<settings::SettingsDrift>,
     pub worlds: Vec<WorldProfile>,
     pub refresh_task: Option<JoinHandle<RefreshResult>>,
     pub log: VecDeque<String>,
@@ -109,6 +114,7 @@ impl App {
             started_at: Instant::now(),
             snapshot: None,
             settings: Vec::new(),
+            settings_drift: None,
             worlds,
             refresh_task: None,
             log: VecDeque::with_capacity(64),
@@ -166,7 +172,8 @@ fn start_refresh(app: &mut App) {
     app.refresh_task = Some(tokio::spawn(async move {
         let snap = HealthSnapshot::collect(&cfg).await?;
         let settings = settings::list(&cfg).await.unwrap_or_default();
-        Ok((snap, settings))
+        let drift = settings::drift(&cfg).await.ok();
+        Ok((snap, settings, drift))
     }));
 }
 
@@ -185,7 +192,7 @@ async fn finish_refresh(app: &mut App) {
     };
 
     match task.await {
-        Ok(Ok((snap, settings))) => {
+        Ok(Ok((snap, settings, drift))) => {
             let map_len = snap.maps.len();
             if app.selected >= map_len {
                 app.selected = map_len.saturating_sub(1);
@@ -194,6 +201,7 @@ async fn finish_refresh(app: &mut App) {
                 app.settings_selected = settings.len().saturating_sub(1);
             }
             app.settings = settings;
+            app.settings_drift = drift;
             app.snapshot = Some(snap);
             app.loading = false;
         }
