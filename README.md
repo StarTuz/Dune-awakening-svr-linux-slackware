@@ -131,7 +131,9 @@ files and immediately restart the selected world's primary Sietch. Check
 pending local-vs-deployed managed setting changes with
 `dune-ctl settings status`; the TUI Settings tab also shows a drift column. If
 the deployed copy is the source of truth, sync it back into the local profile
-with `dune-ctl settings pull` before making more edits.
+with `dune-ctl settings pull` before making more edits. `settings apply` and
+`settings apply-restart` refuse to overwrite deployed managed settings while
+drift exists unless you pass `--force`.
 
 LAN clients behind the Frontier router need an OUTPUT DNAT rule because the
 router does not provide NAT hairpin:

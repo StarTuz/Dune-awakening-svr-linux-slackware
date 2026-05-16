@@ -109,9 +109,17 @@ pub enum SettingsCommand {
     /// Replace local UserEngine.ini/UserGame.ini with the deployed copies
     Pull,
     /// Deploy local UserEngine.ini/UserGame.ini to the filebrowser UserSettings path
-    Apply,
+    Apply {
+        /// Allow deploy even when local settings differ from deployed settings
+        #[arg(long)]
+        force: bool,
+    },
     /// Deploy local settings, then restart the selected world's primary Sietch
-    ApplyRestart,
+    ApplyRestart {
+        /// Allow deploy+restart even when local settings differ from deployed settings
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
@@ -316,11 +324,13 @@ async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
                 "Deployed UserEngine.ini and UserGame.ini copied into local settings profile."
             );
         }
-        SettingsCommand::Apply => {
+        SettingsCommand::Apply { force } => {
+            guard_settings_apply(cfg, force).await?;
             settings::apply(cfg).await?;
             println!("UserEngine.ini and UserGame.ini deployed to /srv/UserSettings.");
         }
-        SettingsCommand::ApplyRestart => {
+        SettingsCommand::ApplyRestart { force } => {
+            guard_settings_apply(cfg, force).await?;
             settings::apply(cfg).await?;
             sietches::restart_primary(cfg).await?;
             println!(
@@ -331,6 +341,43 @@ async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
     }
     println!("Local settings: {}", cfg.user_settings_dir().display());
     Ok(())
+}
+
+async fn guard_settings_apply(cfg: &Config, force: bool) -> Result<()> {
+    let drift = settings::drift(cfg).await?;
+    if !drift.deployed_available || drift.changed_count() == 0 {
+        return Ok(());
+    }
+    if force {
+        eprintln!(
+            "WARNING: deploying despite {} local-vs-deployed managed setting difference(s).",
+            drift.changed_count()
+        );
+        return Ok(());
+    }
+
+    eprintln!(
+        "Refusing to deploy: {} local-vs-deployed managed setting difference(s) detected.",
+        drift.changed_count()
+    );
+    eprintln!("Changed managed settings:");
+    for item in drift.items.iter().filter(|item| item.changed()) {
+        let marker = if matches!(item.def.key, "sietch_name" | "sietch_password") {
+            " !"
+        } else {
+            "  "
+        };
+        eprintln!(
+            "{} {:<24} local={:<12} deployed={}",
+            marker,
+            item.def.key,
+            settings::display_drift_local(item),
+            settings::display_drift_deployed(item)
+        );
+    }
+    eprintln!("Run `dune-ctl settings pull` if deployed settings are the source of truth.");
+    eprintln!("Run this command again with `--force` to overwrite deployed settings anyway.");
+    anyhow::bail!("settings drift guard blocked deploy")
 }
 
 async fn cmd_battlegroup(action: BattlegroupCommand, cfg: &Config) -> Result<()> {

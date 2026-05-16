@@ -93,10 +93,10 @@ impl PendingAction {
                 "Restarts the selected world's primary Sietch by restarting the BattleGroup. Gateway patch may need verification after rollout."
             }
             Self::ApplySettings => {
-                "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings. Some changes need a map or battlegroup restart."
+                "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings. If drift is shown, this overwrites deployed values with local values."
             }
             Self::ApplySettingsAndRestart => {
-                "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings, then restarts the primary Sietch. Connected players will be disconnected."
+                "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings, then restarts the primary Sietch. If drift is shown, this overwrites deployed values. Connected players will be disconnected."
             }
             Self::PullDeployedSettings => {
                 "Replaces local UserEngine.ini and UserGame.ini with the deployed copies from /srv/UserSettings. Live server state is not changed."
