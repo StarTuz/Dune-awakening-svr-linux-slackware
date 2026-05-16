@@ -55,6 +55,7 @@ pub enum PendingAction {
     RestartSietch,
     ApplySettings,
     ApplySettingsAndRestart,
+    PullDeployedSettings,
     InitWorldSettings,
     ClearSietchPassword,
 }
@@ -74,6 +75,7 @@ impl PendingAction {
             Self::RestartSietch => "restart primary sietch",
             Self::ApplySettings => "deploy settings",
             Self::ApplySettingsAndRestart => "deploy settings and restart primary sietch",
+            Self::PullDeployedSettings => "pull deployed settings to local",
             Self::InitWorldSettings => "initialize world settings profile",
             Self::ClearSietchPassword => "clear sietch password",
         }
@@ -95,6 +97,9 @@ impl PendingAction {
             }
             Self::ApplySettingsAndRestart => {
                 "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings, then restarts the primary Sietch. Connected players will be disconnected."
+            }
+            Self::PullDeployedSettings => {
+                "Replaces local UserEngine.ini and UserGame.ini with the deployed copies from /srv/UserSettings. Live server state is not changed."
             }
             Self::InitWorldSettings => {
                 "Creates a per-world UserSettings profile. Future settings edits for this world will use that profile."
@@ -325,6 +330,11 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 app.pending = Some(PendingAction::ApplySettingsAndRestart);
             }
         }
+        KeyCode::Char('U') => {
+            if app.view == View::Settings {
+                app.pending = Some(PendingAction::PullDeployedSettings);
+            }
+        }
         KeyCode::Char('s') => {
             if let Some(name) = selected_map(app) {
                 app.push_log(format!("starting {}...", name));
@@ -458,6 +468,7 @@ async fn execute_pending(app: &mut App) {
             Ok(()) => sietches::restart_primary(&app.cfg).await,
             Err(e) => Err(e),
         },
+        PendingAction::PullDeployedSettings => settings::pull_deployed(&app.cfg).await,
         PendingAction::InitWorldSettings => app.cfg.init_world_settings().map(|_| ()),
         PendingAction::ClearSietchPassword => settings::set(&app.cfg, "sietch_password", "").await,
     };

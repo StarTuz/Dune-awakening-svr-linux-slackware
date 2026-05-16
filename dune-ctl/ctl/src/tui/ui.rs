@@ -728,7 +728,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
     };
     let view_actions = match app.view {
         View::Settings => {
-            " [N] name  [P] password  [C] no password  [I] init profile  [e] edit  [t] toggle  [a] apply  [D] deploy+restart "
+            " [N] name  [P] password  [C] no password  [I] init profile  [e] edit  [t] toggle  [U] pull  [a] apply  [D] deploy+restart "
         }
         View::Worlds => " [I] init profile ",
         _ => " [s/x] map ",
@@ -854,6 +854,9 @@ fn draw_settings_detail(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from("[C] clears the password locally"));
     }
     lines.push(Line::from("[e] edits this setting locally"));
+    lines.push(Line::from(
+        "[U] pulls deployed User*.ini files into the local profile",
+    ));
     lines.push(Line::from("[a] deploys both User*.ini files"));
     lines.push(Line::from(
         "[D] deploys User*.ini files and restarts the primary Sietch",

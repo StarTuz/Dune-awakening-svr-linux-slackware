@@ -342,6 +342,25 @@ pub async fn apply(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
+pub async fn pull_deployed(cfg: &Config) -> Result<()> {
+    let pod = filebrowser_pod(cfg).await?;
+    tokio::fs::create_dir_all(cfg.user_settings_dir())
+        .await
+        .with_context(|| format!("failed to create {}", cfg.user_settings_dir().display()))?;
+
+    for file in [SettingsFile::Engine, SettingsFile::Game] {
+        let src = format!(
+            "{}/{}:/srv/UserSettings/{}",
+            cfg.namespace,
+            pod,
+            file.filename()
+        );
+        let dst = setting_path(cfg, file).to_string_lossy().to_string();
+        kubectl::run(&["cp", &src, &dst]).await?;
+    }
+    Ok(())
+}
+
 pub async fn diff(cfg: &Config) -> Result<String> {
     let pod = filebrowser_pod(cfg).await?;
     let mut out = String::new();

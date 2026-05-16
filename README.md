@@ -129,7 +129,9 @@ then deploy with `dune-ctl settings apply`. Use
 `dune-ctl settings apply-restart` when you want to deploy both `User*.ini`
 files and immediately restart the selected world's primary Sietch. Check
 pending local-vs-deployed managed setting changes with
-`dune-ctl settings status`; the TUI Settings tab also shows a drift column.
+`dune-ctl settings status`; the TUI Settings tab also shows a drift column. If
+the deployed copy is the source of truth, sync it back into the local profile
+with `dune-ctl settings pull` before making more edits.
 
 LAN clients behind the Frontier router need an OUTPUT DNAT rule because the
 router does not provide NAT hairpin:

@@ -106,6 +106,8 @@ pub enum SettingsCommand {
     Status,
     /// Compare local config files to the deployed UserSettings copy
     Diff,
+    /// Replace local UserEngine.ini/UserGame.ini with the deployed copies
+    Pull,
     /// Deploy local UserEngine.ini/UserGame.ini to the filebrowser UserSettings path
     Apply,
     /// Deploy local settings, then restart the selected world's primary Sietch
@@ -307,6 +309,12 @@ async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
         }
         SettingsCommand::Diff => {
             print!("{}", settings::diff(cfg).await?);
+        }
+        SettingsCommand::Pull => {
+            settings::pull_deployed(cfg).await?;
+            println!(
+                "Deployed UserEngine.ini and UserGame.ini copied into local settings profile."
+            );
         }
         SettingsCommand::Apply => {
             settings::apply(cfg).await?;
