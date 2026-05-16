@@ -371,14 +371,24 @@ fn begin_setting_edit(app: &mut App) {
         app.push_log("no setting selected");
         return;
     };
+    let value = if item.def.secret {
+        String::new()
+    } else if item.def.key == "sietch_name" {
+        item.value
+            .clone()
+            .or_else(|| {
+                app.snapshot
+                    .as_ref()
+                    .and_then(|snap| snap.battlegroup_title.clone())
+            })
+            .unwrap_or_default()
+    } else {
+        item.value.clone().unwrap_or_default()
+    };
     app.input = Some(InputMode {
         key: item.def.key.to_string(),
         label: item.def.label.to_string(),
-        value: if item.def.secret {
-            String::new()
-        } else {
-            item.value.clone().unwrap_or_default()
-        },
+        value,
     });
 }
 

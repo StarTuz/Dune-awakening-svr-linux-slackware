@@ -574,7 +574,7 @@ fn draw_settings_table(f: &mut Frame, app: &App, area: Rect) {
             };
             Row::new(vec![
                 Cell::from(format!("{}{}", dot, item.def.key)),
-                Cell::from(settings::display_value(item)),
+                Cell::from(setting_display_value(app, item)),
                 Cell::from(item.def.file.label()),
                 Cell::from(settings::kind_label(item.def.kind)),
                 Cell::from(item.def.label),
@@ -623,7 +623,7 @@ fn draw_settings_detail(f: &mut Frame, app: &App, area: Rect) {
         )),
         Line::from(item.def.label),
         Line::from(""),
-        Line::from(format!("Value: {}", settings::display_value(item))),
+        Line::from(format!("Value: {}", setting_display_value(app, item))),
         Line::from(format!("File: {}", item.def.file.filename())),
         Line::from(format!("Section: [{}]", item.def.section)),
         Line::from(format!("INI key: {}", item.def.ini_key)),
@@ -649,6 +649,21 @@ fn draw_settings_detail(f: &mut Frame, app: &App, area: Rect) {
             .wrap(Wrap { trim: true }),
         area,
     );
+}
+
+fn setting_display_value(app: &App, item: &settings::SettingValue) -> String {
+    let value = settings::display_value(item);
+    if item.def.key == "sietch_name" && value == "—" {
+        if let Some(title) = app
+            .snapshot
+            .as_ref()
+            .and_then(|snap| snap.battlegroup_title.as_deref())
+            .filter(|title| !title.trim().is_empty())
+        {
+            return title.to_string();
+        }
+    }
+    value
 }
 
 fn draw_input(f: &mut Frame, app: &App) {
