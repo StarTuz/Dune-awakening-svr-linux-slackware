@@ -75,6 +75,7 @@ nft list tables
 free -h
 swapon --show
 ~/dune-server/scripts/vpa/watch-gameservers.sh --once
+sudo ~/dune-server/scripts/resource-snapshot.sh known-good-YYYYMMDD-resources
 
 # Backups
 ~/dune-server/scripts/dune-backup.sh

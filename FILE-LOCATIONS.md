@@ -51,6 +51,7 @@ Common paths for the native Slackware Dune: Awakening deployment.
 | Gateway patch | `/home/dune/dune-server/scripts/gateway-patch.sh` |
 | Security exposure audit | `/home/dune/dune-server/scripts/security-audit.sh` |
 | Live system snapshot | `/home/dune/dune-server/scripts/system-snapshot.sh` |
+| Resource snapshot | `/home/dune/dune-server/scripts/resource-snapshot.sh` |
 | Map toggle | `/home/dune/dune-server/scripts/map-toggle.sh` |
 | Funcom patch driver | `/home/dune/dune-server/scripts/funcom-patches.sh` |
 | Funcom patch baselines | `/home/dune/dune-server/scripts/funcom-patches/*.upstream` |
@@ -131,6 +132,7 @@ With that backend, `nft list tables` should not show `table inet firewalld`.
 | Backup mount | `/srv/backups` |
 | Dune backups | `/srv/backups/dune` |
 | System snapshot reports | `/srv/backups/dune/system-snapshots` |
+| Resource snapshot reports | `/srv/backups/dune/resource-snapshots` |
 | Root btrfs snapshots | `/.snapshots` |
 | Backup btrfs snapshots | `/srv/backups/.snapshots` |
 | Conan backups | `/srv/backups/conan` |

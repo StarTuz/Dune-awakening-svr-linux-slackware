@@ -44,6 +44,16 @@ snapshots of `/` and `/srv/backups`. The logical database dump remains the clean
 restore artifact for Postgres; the btrfs snapshots preserve the live host,
 server package, k3s local-path data, and backup volume state.
 
+For a lightweight resource-only point-in-time record, use:
+
+```sh
+sudo ~/dune-server/scripts/resource-snapshot.sh known-good-YYYYMMDD-resources
+```
+
+That writes host memory/swap, process, filesystem, Kubernetes pod/resource,
+serverstats, `kubectl top`, VPA, and game-server memory watcher output under
+`/srv/backups/dune/resource-snapshots/<name>/`.
+
 It creates:
 
 ```text
