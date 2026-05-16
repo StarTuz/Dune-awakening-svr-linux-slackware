@@ -32,6 +32,7 @@ pub enum ValueKind {
     BoolTitle,
     Float,
     Integer,
+    QuotedString,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -42,6 +43,7 @@ pub struct SettingDef {
     pub section: &'static str,
     pub ini_key: &'static str,
     pub kind: ValueKind,
+    pub secret: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +60,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "URL",
         ini_key: "Port",
         kind: ValueKind::Integer,
+        secret: false,
     },
     SettingDef {
         key: "igw_port",
@@ -66,6 +69,25 @@ pub const CATALOG: &[SettingDef] = &[
         section: "URL",
         ini_key: "IGWPort",
         kind: ValueKind::Integer,
+        secret: false,
+    },
+    SettingDef {
+        key: "sietch_name",
+        label: "Sietch display name",
+        file: SettingsFile::Engine,
+        section: "ConsoleVariables",
+        ini_key: "Bgd.ServerDisplayName",
+        kind: ValueKind::QuotedString,
+        secret: false,
+    },
+    SettingDef {
+        key: "sietch_password",
+        label: "Sietch login password",
+        file: SettingsFile::Engine,
+        section: "ConsoleVariables",
+        ini_key: "Bgd.ServerLoginPassword",
+        kind: ValueKind::QuotedString,
+        secret: true,
     },
     SettingDef {
         key: "mining_output",
@@ -74,6 +96,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "ConsoleVariables",
         ini_key: "Dune.GlobalMiningOutputMultiplier",
         kind: ValueKind::Float,
+        secret: false,
     },
     SettingDef {
         key: "vehicle_mining_output",
@@ -82,6 +105,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "ConsoleVariables",
         ini_key: "Dune.GlobalVehicleMiningOutputMultiplier",
         kind: ValueKind::Float,
+        secret: false,
     },
     SettingDef {
         key: "pvp_resource_multiplier",
@@ -90,6 +114,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "ConsoleVariables",
         ini_key: "SecurityZones.PvpResourceMultiplier",
         kind: ValueKind::Float,
+        secret: false,
     },
     SettingDef {
         key: "vehicle_durability_damage",
@@ -98,6 +123,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "ConsoleVariables",
         ini_key: "dw.VehicleDurabilityDamageMultiplier",
         kind: ValueKind::Float,
+        secret: false,
     },
     SettingDef {
         key: "sandstorm",
@@ -106,6 +132,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "ConsoleVariables",
         ini_key: "Sandstorm.Enabled",
         kind: ValueKind::BoolInt,
+        secret: false,
     },
     SettingDef {
         key: "sandstorm_treasure",
@@ -114,6 +141,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "ConsoleVariables",
         ini_key: "Sandstorm.Treasure.Enabled",
         kind: ValueKind::BoolInt,
+        secret: false,
     },
     SettingDef {
         key: "sandworm",
@@ -122,6 +150,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "ConsoleVariables",
         ini_key: "sandworm.dune.Enabled",
         kind: ValueKind::BoolInt,
+        secret: false,
     },
     SettingDef {
         key: "vehicle_worm_collision",
@@ -130,6 +159,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "ConsoleVariables",
         ini_key: "Vehicle.SandwormCollisionInteraction",
         kind: ValueKind::BoolLower,
+        secret: false,
     },
     SettingDef {
         key: "worm_danger_zones",
@@ -138,6 +168,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "ConsoleVariables",
         ini_key: "Sandworm.SandwormDangerZonesEnabled",
         kind: ValueKind::BoolLower,
+        secret: false,
     },
     SettingDef {
         key: "pvp_all",
@@ -146,6 +177,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "/Script/DuneSandbox.PvpPveSettings",
         ini_key: "m_bShouldForceEnablePvpOnAllPartitions",
         kind: ValueKind::BoolTitle,
+        secret: false,
     },
     SettingDef {
         key: "security_zones",
@@ -154,6 +186,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "/Script/DuneSandbox.SecurityZonesSubsystem",
         ini_key: "m_bAreSecurityZonesEnabled",
         kind: ValueKind::BoolTitle,
+        secret: false,
     },
     SettingDef {
         key: "item_deterioration_rate",
@@ -162,6 +195,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "/DeteriorationSystem.ItemDeteriorationConstants",
         ini_key: "UpdateRateInSeconds",
         kind: ValueKind::Float,
+        secret: false,
     },
     SettingDef {
         key: "coriolis_storm",
@@ -170,6 +204,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "/Script/DuneSandbox.SandStormConfig",
         ini_key: "m_bCoriolisAutoSpawnEnabled",
         kind: ValueKind::BoolTitle,
+        secret: false,
     },
     SettingDef {
         key: "landclaim_segments",
@@ -178,6 +213,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "/Script/DuneSandbox.BuildingSettings",
         ini_key: "m_MaxNumLandclaimSegments",
         kind: ValueKind::Integer,
+        secret: false,
     },
     SettingDef {
         key: "building_restrictions",
@@ -186,6 +222,7 @@ pub const CATALOG: &[SettingDef] = &[
         section: "/Script/DuneSandbox.BuildingSettings",
         ini_key: "m_bBuildingRestrictionLimitsEnabled",
         kind: ValueKind::BoolTitle,
+        secret: false,
     },
 ];
 
@@ -198,6 +235,7 @@ pub fn kind_label(kind: ValueKind) -> &'static str {
         ValueKind::BoolInt | ValueKind::BoolLower | ValueKind::BoolTitle => "bool",
         ValueKind::Float => "float",
         ValueKind::Integer => "int",
+        ValueKind::QuotedString => "string",
     }
 }
 
@@ -335,6 +373,25 @@ pub fn is_bool(kind: ValueKind) -> bool {
     )
 }
 
+pub fn display_value(item: &SettingValue) -> String {
+    let Some(value) = item.value.as_deref() else {
+        return "—".to_string();
+    };
+    if !item.def.secret {
+        return value.to_string();
+    }
+    let unquoted = value
+        .trim()
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .unwrap_or(value.trim());
+    if unquoted.is_empty() {
+        "none".to_string()
+    } else {
+        "********".to_string()
+    }
+}
+
 fn find_def(key: &str) -> Result<SettingDef> {
     CATALOG
         .iter()
@@ -377,7 +434,23 @@ fn normalize_value(kind: ValueKind, value: &str) -> Result<String> {
             value.parse::<i64>().context("expected integer value")?;
             Ok(value.to_string())
         }
+        ValueKind::QuotedString => quote_string_value(value),
     }
+}
+
+fn quote_string_value(value: &str) -> Result<String> {
+    let trimmed = value.trim();
+    let unquoted = trimmed
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .unwrap_or(trimmed);
+    if unquoted.contains('\'') || unquoted.contains('|') {
+        anyhow::bail!("single quote and pipe characters are not allowed");
+    }
+    if unquoted.contains('"') {
+        anyhow::bail!("double quote characters are not allowed inside this value");
+    }
+    Ok(format!("\"{}\"", unquoted))
 }
 
 fn parse_bool(value: &str) -> Option<bool> {

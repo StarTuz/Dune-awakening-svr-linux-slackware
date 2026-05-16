@@ -100,7 +100,7 @@ async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
                 println!(
                     "{:<28} {:<12} {:<8} {:<6} {}",
                     item.def.key,
-                    item.value.unwrap_or_else(|| "—".to_string()),
+                    settings::display_value(&item),
                     item.def.file.label(),
                     settings::kind_label(item.def.kind),
                     item.def.label

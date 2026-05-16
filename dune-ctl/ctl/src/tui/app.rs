@@ -42,6 +42,7 @@ pub enum PendingAction {
     StopBattlegroup,
     RestartBattlegroup,
     ApplySettings,
+    ClearSietchPassword,
 }
 
 #[derive(Debug, Clone)]
@@ -58,18 +59,22 @@ impl PendingAction {
             Self::StopBattlegroup => "stop battlegroup",
             Self::RestartBattlegroup => "restart battlegroup",
             Self::ApplySettings => "deploy settings",
+            Self::ClearSietchPassword => "clear sietch password",
         }
     }
 
     pub fn risk(self) -> &'static str {
         match self {
-            Self::StartBattlegroup => "Starts all desired battlegroup infrastructure.",
-            Self::StopBattlegroup => "Stops the whole battlegroup. Connected players will be disconnected.",
+            Self::StartBattlegroup => "Starts the sietch/battlegroup infrastructure.",
+            Self::StopBattlegroup => "Stops the sietch/battlegroup. Connected players will be disconnected.",
             Self::RestartBattlegroup => {
-                "Stops then starts the whole battlegroup. Gateway patch may need verification after rollout."
+                "Stops then starts the sietch/battlegroup. Gateway patch may need verification after rollout."
             }
             Self::ApplySettings => {
                 "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings. Some changes need a map or battlegroup restart."
+            }
+            Self::ClearSietchPassword => {
+                "Sets the local Sietch password to an empty string. Deploy settings to make it live."
             }
         }
     }
@@ -231,6 +236,17 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('R') => {
             app.pending = Some(PendingAction::RestartBattlegroup);
         }
+        KeyCode::Char('N') => {
+            app.view = View::Settings;
+            begin_setting_edit_by_key(app, "sietch_name");
+        }
+        KeyCode::Char('P') => {
+            app.view = View::Settings;
+            begin_setting_edit_by_key(app, "sietch_password");
+        }
+        KeyCode::Char('C') => {
+            app.pending = Some(PendingAction::ClearSietchPassword);
+        }
         KeyCode::Down | KeyCode::Char('j') => match app.view {
             View::Settings if !app.settings.is_empty() => {
                 app.settings_selected = (app.settings_selected + 1) % app.settings.len();
@@ -318,7 +334,11 @@ async fn handle_input_key(app: &mut App, code: KeyCode) {
             };
             match settings::set(&app.cfg, &input.key, &input.value).await {
                 Ok(()) => {
-                    app.push_log(format!("{} set to {}", input.key, input.value));
+                    if input.key == "sietch_password" {
+                        app.push_log("sietch_password updated locally");
+                    } else {
+                        app.push_log(format!("{} set to {}", input.key, input.value));
+                    }
                     start_refresh(app);
                 }
                 Err(e) => {
@@ -354,8 +374,21 @@ fn begin_setting_edit(app: &mut App) {
     app.input = Some(InputMode {
         key: item.def.key.to_string(),
         label: item.def.label.to_string(),
-        value: item.value.clone().unwrap_or_default(),
+        value: if item.def.secret {
+            String::new()
+        } else {
+            item.value.clone().unwrap_or_default()
+        },
     });
+}
+
+fn begin_setting_edit_by_key(app: &mut App, key: &str) {
+    let Some(index) = app.settings.iter().position(|item| item.def.key == key) else {
+        app.push_log(format!("{} setting not loaded", key));
+        return;
+    };
+    app.settings_selected = index;
+    begin_setting_edit(app);
 }
 
 async fn execute_pending(app: &mut App) {
@@ -368,6 +401,7 @@ async fn execute_pending(app: &mut App) {
         PendingAction::StopBattlegroup => battlegroup::stop(&app.cfg).await,
         PendingAction::RestartBattlegroup => battlegroup::restart(&app.cfg).await,
         PendingAction::ApplySettings => settings::apply(&app.cfg).await,
+        PendingAction::ClearSietchPassword => settings::set(&app.cfg, "sietch_password", "").await,
     };
     match result {
         Ok(()) => {

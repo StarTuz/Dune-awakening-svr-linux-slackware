@@ -505,12 +505,14 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
         View::Settings => "[Tab/1] dashboard",
     };
     let view_actions = match app.view {
-        View::Settings => " [e] edit  [t] toggle  [a] apply settings ",
+        View::Settings => {
+            " [N] name  [P] password  [C] no password  [e] edit  [t] toggle  [a] apply "
+        }
         _ => " [s/x] map ",
     };
     f.render_widget(
         Paragraph::new(format!(
-            " {}  [A] start BG  [Z] stop BG  [R] restart BG {} [g] gateway  [r] refresh  [q] quit",
+            " {}  [A] start sietch  [Z] stop sietch  [R] restart {} [g] gateway  [r] refresh  [q] quit",
             view_hint, view_actions
         ))
         .style(Style::default().fg(Color::DarkGray)),
@@ -558,7 +560,7 @@ fn draw_settings_table(f: &mut Frame, app: &App, area: Rect) {
             };
             Row::new(vec![
                 Cell::from(format!("{}{}", dot, item.def.key)),
-                Cell::from(item.value.clone().unwrap_or_else(|| "—".to_string())),
+                Cell::from(settings::display_value(item)),
                 Cell::from(item.def.file.label()),
                 Cell::from(settings::kind_label(item.def.kind)),
                 Cell::from(item.def.label),
@@ -607,7 +609,7 @@ fn draw_settings_detail(f: &mut Frame, app: &App, area: Rect) {
         )),
         Line::from(item.def.label),
         Line::from(""),
-        Line::from(format!("Value: {}", item.value.as_deref().unwrap_or("—"))),
+        Line::from(format!("Value: {}", settings::display_value(item))),
         Line::from(format!("File: {}", item.def.file.filename())),
         Line::from(format!("Section: [{}]", item.def.section)),
         Line::from(format!("INI key: {}", item.def.ini_key)),
@@ -616,6 +618,9 @@ fn draw_settings_detail(f: &mut Frame, app: &App, area: Rect) {
     if settings::is_bool(item.def.kind) {
         lines.push(Line::from(""));
         lines.push(Line::from("[t] toggles this setting locally"));
+    }
+    if item.def.key == "sietch_password" {
+        lines.push(Line::from("[C] clears the password locally"));
     }
     lines.push(Line::from("[e] edits this setting locally"));
     lines.push(Line::from("[a] deploys both User*.ini files"));
