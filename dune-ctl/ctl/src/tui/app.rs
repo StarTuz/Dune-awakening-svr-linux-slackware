@@ -4,11 +4,10 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use dune_ctl_core::{
-    battlegroup,
     config::{Config, WorldProfile},
     gateway,
     health::HealthSnapshot,
-    maps, settings,
+    maps, settings, sietches,
 };
 use ratatui::{backend::Backend, Terminal};
 use tokio::task::JoinHandle;
@@ -46,9 +45,9 @@ pub enum View {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PendingAction {
-    StartBattlegroup,
-    StopBattlegroup,
-    RestartBattlegroup,
+    StartSietch,
+    StopSietch,
+    RestartSietch,
     ApplySettings,
     InitWorldSettings,
     ClearSietchPassword,
@@ -64,9 +63,9 @@ pub struct InputMode {
 impl PendingAction {
     pub fn label(self) -> &'static str {
         match self {
-            Self::StartBattlegroup => "start battlegroup",
-            Self::StopBattlegroup => "stop battlegroup",
-            Self::RestartBattlegroup => "restart battlegroup",
+            Self::StartSietch => "start primary sietch",
+            Self::StopSietch => "stop primary sietch",
+            Self::RestartSietch => "restart primary sietch",
             Self::ApplySettings => "deploy settings",
             Self::InitWorldSettings => "initialize world settings profile",
             Self::ClearSietchPassword => "clear sietch password",
@@ -75,10 +74,14 @@ impl PendingAction {
 
     pub fn risk(self) -> &'static str {
         match self {
-            Self::StartBattlegroup => "Starts the sietch/battlegroup infrastructure.",
-            Self::StopBattlegroup => "Stops the sietch/battlegroup. Connected players will be disconnected.",
-            Self::RestartBattlegroup => {
-                "Stops then starts the sietch/battlegroup. Gateway patch may need verification after rollout."
+            Self::StartSietch => {
+                "Starts the selected world's primary Sietch. Current self-hosting maps this to BattleGroup start."
+            }
+            Self::StopSietch => {
+                "Stops the selected world's primary Sietch. Current self-hosting maps this to BattleGroup stop, disconnecting players."
+            }
+            Self::RestartSietch => {
+                "Restarts the selected world's primary Sietch by restarting the BattleGroup. Gateway patch may need verification after rollout."
             }
             Self::ApplySettings => {
                 "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings. Some changes need a map or battlegroup restart."
@@ -247,13 +250,13 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
             app.view = View::Settings;
         }
         KeyCode::Char('A') => {
-            app.pending = Some(PendingAction::StartBattlegroup);
+            app.pending = Some(PendingAction::StartSietch);
         }
         KeyCode::Char('Z') => {
-            app.pending = Some(PendingAction::StopBattlegroup);
+            app.pending = Some(PendingAction::StopSietch);
         }
         KeyCode::Char('R') => {
-            app.pending = Some(PendingAction::RestartBattlegroup);
+            app.pending = Some(PendingAction::RestartSietch);
         }
         KeyCode::Char('N') => {
             app.view = View::Settings;
@@ -429,9 +432,9 @@ async fn execute_pending(app: &mut App) {
     };
     app.push_log(format!("confirming {}...", action.label()));
     let result = match action {
-        PendingAction::StartBattlegroup => battlegroup::start(&app.cfg).await,
-        PendingAction::StopBattlegroup => battlegroup::stop(&app.cfg).await,
-        PendingAction::RestartBattlegroup => battlegroup::restart(&app.cfg).await,
+        PendingAction::StartSietch => sietches::start_primary(&app.cfg).await,
+        PendingAction::StopSietch => sietches::stop_primary(&app.cfg).await,
+        PendingAction::RestartSietch => sietches::restart_primary(&app.cfg).await,
         PendingAction::ApplySettings => settings::apply(&app.cfg).await,
         PendingAction::InitWorldSettings => app.cfg.init_world_settings().map(|_| ()),
         PendingAction::ClearSietchPassword => settings::set(&app.cfg, "sietch_password", "").await,

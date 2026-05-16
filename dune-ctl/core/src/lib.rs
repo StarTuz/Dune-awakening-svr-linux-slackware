@@ -7,4 +7,5 @@ pub mod health;
 pub mod kubectl;
 pub mod maps;
 pub mod settings;
+pub mod sietches;
 pub mod update;

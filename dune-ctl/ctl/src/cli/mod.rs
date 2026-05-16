@@ -7,7 +7,7 @@ use dune_ctl_core::{
     fls::FlsTokenState,
     gateway,
     health::HealthSnapshot,
-    maps, settings, update,
+    maps, settings, sietches, update,
 };
 
 #[derive(Subcommand)]
@@ -76,6 +76,12 @@ pub enum MapsCommand {
 pub enum SietchesCommand {
     /// List known Sietches in the selected world
     List,
+    /// Start the selected world's primary Sietch
+    Start,
+    /// Stop the selected world's primary Sietch
+    Stop,
+    /// Restart the selected world's primary Sietch
+    Restart,
 }
 
 #[derive(Subcommand)]
@@ -206,8 +212,33 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
                 );
             }
         }
+        SietchesCommand::Start => {
+            sietches::start_primary(cfg).await?;
+            println!(
+                "Primary Sietch start triggered for {}.",
+                selected_world_label(cfg)
+            );
+        }
+        SietchesCommand::Stop => {
+            sietches::stop_primary(cfg).await?;
+            println!(
+                "Primary Sietch stop triggered for {}.",
+                selected_world_label(cfg)
+            );
+        }
+        SietchesCommand::Restart => {
+            sietches::restart_primary(cfg).await?;
+            println!(
+                "Primary Sietch restart triggered for {}.",
+                selected_world_label(cfg)
+            );
+        }
     }
     Ok(())
+}
+
+fn selected_world_label(cfg: &Config) -> String {
+    cfg.title.as_deref().unwrap_or(&cfg.battlegroup).to_string()
 }
 
 async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {

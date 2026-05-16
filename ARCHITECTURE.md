@@ -189,6 +189,13 @@ and commands can target it with `--world <battlegroup-or-title>`. Multiple
 Sietches inside one World should remain an experimental/disposable-world
 research topic until Funcom exposes or documents that self-host path.
 
+For operator tooling, the current primary Sietch lifecycle is represented by
+the selected BattleGroup lifecycle. `dune-ctl sietches start|stop|restart`
+therefore patches `spec.stop` on the selected BattleGroup today. This is a
+deliberate compatibility layer: if Funcom later exposes multiple Sietches per
+World, the `sietches` command/module is where that behavior should split away
+from whole-world start/stop.
+
 ## Battlegroup Runtime Components
 
 Inside the battlegroup namespace:

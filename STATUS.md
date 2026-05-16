@@ -186,6 +186,7 @@ All items applied. Details in CLAUDE.md § Security.
 | SNMP disabled | ✅ off |
 | FLS token expiry tracking | ✅ in dune-ctl (`token-check`); token expires 2027-05-08, rotate by 2027-04-08 |
 | dune-ctl world targeting | ✅ `worlds list`, `--world`, and per-world settings profiles for PTC/official cutover |
+| dune-ctl primary Sietch lifecycle | ✅ `sietches list/start/stop/restart`; start/stop/restart currently map to selected BattleGroup lifecycle |
 
 ## Future official launch cutover
 
@@ -206,7 +207,7 @@ Planned sequence:
 ~/dune-server/dune-ctl/target/debug/dune-ctl --world <official-bg> status
 
 # Power down the PTC world after official validation
-~/dune-server/dune-ctl/target/debug/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx battlegroup stop
+~/dune-server/dune-ctl/target/debug/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx sietches stop
 ```
 
 Do not run both PTC and official worlds live on this 16 GiB host without a port

@@ -688,7 +688,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
     };
     f.render_widget(
         Paragraph::new(format!(
-            " {}  [A] start sietch  [Z] stop sietch  [R] restart {} [g] gateway  [r] refresh  [q] quit",
+            " {}  [A] start primary  [Z] stop primary  [R] restart {} [g] gateway  [r] refresh  [q] quit",
             view_hint, view_actions
         ))
         .style(Style::default().fg(Color::DarkGray)),

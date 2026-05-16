@@ -116,7 +116,13 @@ After that, `settings list/set/apply` for that world uses
 `~/.dune/worlds/<bg>/UserSettings/`. This is intended for the eventual
 PTC-to-official transition: create the official world, initialize its settings
 profile, verify it, then stop the old PTC battlegroup explicitly with
-`dune-ctl --world <ptc-bg> battlegroup stop`.
+`dune-ctl --world <ptc-bg> sietches stop`.
+
+`dune-ctl sietches list` shows the selected world's primary Sietch. The current
+PTC self-host package exposes one Sietch per BattleGroup, so
+`dune-ctl sietches start|stop|restart` intentionally maps to the selected
+BattleGroup lifecycle. Keep using `maps start|stop <map>` for individual travel
+maps such as `DeepDesert_1` or story instances.
 
 LAN clients behind the Frontier router need an OUTPUT DNAT rule because the
 router does not provide NAT hairpin:
