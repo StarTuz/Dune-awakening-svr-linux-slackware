@@ -3,7 +3,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use dune_ctl_core::{battlegroup, config::Config, gateway, health::HealthSnapshot, maps, settings};
+use dune_ctl_core::{
+    battlegroup,
+    config::{Config, WorldProfile},
+    gateway,
+    health::HealthSnapshot,
+    maps, settings,
+};
 use ratatui::{backend::Backend, Terminal};
 use tokio::task::JoinHandle;
 
@@ -18,6 +24,7 @@ pub struct App {
     pub started_at: Instant,
     pub snapshot: Option<HealthSnapshot>,
     pub settings: Vec<settings::SettingValue>,
+    pub worlds: Vec<WorldProfile>,
     pub refresh_task: Option<JoinHandle<RefreshResult>>,
     pub log: VecDeque<String>,
     pub view: View,
@@ -31,6 +38,7 @@ pub struct App {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
+    Worlds,
     Dashboard,
     Maps,
     Settings,
@@ -42,6 +50,7 @@ pub enum PendingAction {
     StopBattlegroup,
     RestartBattlegroup,
     ApplySettings,
+    InitWorldSettings,
     ClearSietchPassword,
 }
 
@@ -59,6 +68,7 @@ impl PendingAction {
             Self::StopBattlegroup => "stop battlegroup",
             Self::RestartBattlegroup => "restart battlegroup",
             Self::ApplySettings => "deploy settings",
+            Self::InitWorldSettings => "initialize world settings profile",
             Self::ClearSietchPassword => "clear sietch password",
         }
     }
@@ -73,6 +83,9 @@ impl PendingAction {
             Self::ApplySettings => {
                 "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings. Some changes need a map or battlegroup restart."
             }
+            Self::InitWorldSettings => {
+                "Creates a per-world UserSettings profile. Future settings edits for this world will use that profile."
+            }
             Self::ClearSietchPassword => {
                 "Sets the local Sietch password to an empty string. Deploy settings to make it live."
             }
@@ -82,11 +95,13 @@ impl PendingAction {
 
 impl App {
     fn new(cfg: Config) -> Self {
+        let worlds = Config::discover_worlds().unwrap_or_default();
         Self {
             cfg,
             started_at: Instant::now(),
             snapshot: None,
             settings: Vec::new(),
+            worlds,
             refresh_task: None,
             log: VecDeque::with_capacity(64),
             view: View::Dashboard,
@@ -213,18 +228,22 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         }
         KeyCode::Tab => {
             app.view = match app.view {
+                View::Worlds => View::Dashboard,
                 View::Dashboard => View::Maps,
                 View::Maps => View::Settings,
-                View::Settings => View::Dashboard,
+                View::Settings => View::Worlds,
             };
         }
         KeyCode::Char('1') => {
-            app.view = View::Dashboard;
+            app.view = View::Worlds;
         }
         KeyCode::Char('2') => {
-            app.view = View::Maps;
+            app.view = View::Dashboard;
         }
         KeyCode::Char('3') => {
+            app.view = View::Maps;
+        }
+        KeyCode::Char('4') => {
             app.view = View::Settings;
         }
         KeyCode::Char('A') => {
@@ -246,6 +265,9 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         }
         KeyCode::Char('C') => {
             app.pending = Some(PendingAction::ClearSietchPassword);
+        }
+        KeyCode::Char('I') => {
+            app.pending = Some(PendingAction::InitWorldSettings);
         }
         KeyCode::Down | KeyCode::Char('j') => match app.view {
             View::Settings if !app.settings.is_empty() => {
@@ -411,11 +433,13 @@ async fn execute_pending(app: &mut App) {
         PendingAction::StopBattlegroup => battlegroup::stop(&app.cfg).await,
         PendingAction::RestartBattlegroup => battlegroup::restart(&app.cfg).await,
         PendingAction::ApplySettings => settings::apply(&app.cfg).await,
+        PendingAction::InitWorldSettings => app.cfg.init_world_settings().map(|_| ()),
         PendingAction::ClearSietchPassword => settings::set(&app.cfg, "sietch_password", "").await,
     };
     match result {
         Ok(()) => {
             app.push_log(format!("{} triggered", action.label()));
+            app.worlds = Config::discover_worlds().unwrap_or_default();
             start_refresh(app);
         }
         Err(e) => app.push_log(format!("{} error: {:#}", action.label(), e)),

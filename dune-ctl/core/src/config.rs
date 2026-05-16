@@ -18,6 +18,7 @@ pub struct Config {
     pub namespace: String,
     pub title: Option<String>,
     pub world_spec: Option<PathBuf>,
+    pub explicit_target: bool,
     pub scripts_dir: PathBuf,
 }
 
@@ -82,6 +83,7 @@ impl Config {
             battlegroup: selected.battlegroup.clone(),
             title: selected.title.clone(),
             world_spec: Some(selected.spec_path.clone()),
+            explicit_target: target.is_some(),
             scripts_dir: PathBuf::from(&home).join("dune-server/scripts"),
         }))
     }
@@ -93,6 +95,7 @@ impl Config {
             battlegroup: bg,
             title: Some("Slackware-Arrakis".to_string()),
             world_spec: None,
+            explicit_target: false,
             scripts_dir: PathBuf::from("/home/dune/dune-server/scripts"),
         }
     }
@@ -110,6 +113,14 @@ impl Config {
             world_dir
         } else {
             self.default_user_settings_dir()
+        }
+    }
+
+    pub fn settings_profile_label(&self) -> &'static str {
+        if self.world_user_settings_dir().exists() {
+            "profile"
+        } else {
+            "shared"
         }
     }
 

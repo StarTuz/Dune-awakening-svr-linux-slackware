@@ -21,7 +21,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // header bar
+            Constraint::Length(4), // header bar
             Constraint::Length(3), // tabs
             Constraint::Min(10),   // active view
             Constraint::Length(7), // log pane
@@ -32,6 +32,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_header(f, app, chunks[0]);
     draw_tabs(f, app, chunks[1]);
     match app.view {
+        View::Worlds => draw_worlds_view(f, app, chunks[2]),
         View::Dashboard => draw_dashboard(f, app, chunks[2]),
         View::Maps => draw_maps_view(f, app, chunks[2]),
         View::Settings => draw_settings_view(f, app, chunks[2]),
@@ -51,6 +52,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let phase = snap.map(|s| s.battlegroup_phase.as_str()).unwrap_or("—");
     let title = sietch_title(app, snap).unwrap_or("dune-ctl");
     let loading = if app.loading { " [loading]" } else { "" };
+    let multi_world_warning = app.worlds.len() > 1 && !app.cfg.explicit_target;
 
     let fls_span = snap
         .and_then(|s| s.fls.as_ref())
@@ -75,7 +77,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         })
         .unwrap_or_else(|| Span::raw(" RAM:— "));
 
-    let line = Line::from(vec![
+    let primary = Line::from(vec![
         Span::styled(
             format!(
                 " {}  {}  Phase:{}{}",
@@ -86,10 +88,28 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         fls_span,
         ram_span,
     ]);
+    let secondary = Line::from(vec![
+        Span::styled("ns:", Style::default().fg(Color::DarkGray)),
+        Span::raw(format!("{}  ", app.cfg.namespace)),
+        Span::styled("settings:", Style::default().fg(Color::DarkGray)),
+        Span::raw(format!(
+            "{} ({})",
+            app.cfg.user_settings_dir().display(),
+            app.cfg.settings_profile_label()
+        )),
+        if multi_world_warning {
+            Span::styled(
+                "  select with --world or DUNE_CTL_WORLD",
+                Style::default().fg(Color::Yellow),
+            )
+        } else {
+            Span::raw("")
+        },
+    ]);
 
     if area.width < 96 {
         f.render_widget(
-            Paragraph::new(line).block(Block::default().borders(Borders::ALL)),
+            Paragraph::new(vec![primary, secondary]).block(Block::default().borders(Borders::ALL)),
             area,
         );
         return;
@@ -104,7 +124,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Min(20), Constraint::Length(30)])
         .split(inner);
 
-    f.render_widget(Paragraph::new(line), header_chunks[0]);
+    f.render_widget(Paragraph::new(vec![primary, secondary]), header_chunks[0]);
     f.render_widget(
         Paragraph::new(mascot_line(app))
             .alignment(Alignment::Right)
@@ -145,11 +165,12 @@ fn mascot_line(app: &App) -> &'static str {
 
 fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
     let selected = match app.view {
-        View::Dashboard => 0,
-        View::Maps => 1,
-        View::Settings => 2,
+        View::Worlds => 0,
+        View::Dashboard => 1,
+        View::Maps => 2,
+        View::Settings => 3,
     };
-    let titles = ["1 Dashboard", "2 Maps", "3 Settings"];
+    let titles = ["1 Worlds", "2 Dashboard", "3 Maps", "4 Settings"];
     f.render_widget(
         Tabs::new(titles)
             .select(selected)
@@ -162,6 +183,79 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
             ),
         area,
     );
+}
+
+fn draw_worlds_view(f: &mut Frame, app: &App, area: Rect) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .split(area);
+    draw_worlds_table(f, app, columns[0]);
+    draw_world_detail(f, app, columns[1]);
+}
+
+fn draw_worlds_table(f: &mut Frame, app: &App, area: Rect) {
+    let rows: Vec<Row> = app
+        .worlds
+        .iter()
+        .map(|world| {
+            let active = world.battlegroup == app.cfg.battlegroup;
+            Row::new(vec![
+                Cell::from(if active { "●" } else { "○" }),
+                Cell::from(world.title.clone().unwrap_or_else(|| "—".to_string())),
+                Cell::from(world.battlegroup.clone()),
+                Cell::from(if world_settings_profile_exists(&world.battlegroup) {
+                    "profile"
+                } else {
+                    "shared"
+                }),
+            ])
+            .style(if active {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            })
+        })
+        .collect();
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(3),
+            Constraint::Min(18),
+            Constraint::Length(30),
+            Constraint::Length(9),
+        ],
+    )
+    .header(header_row(vec!["", "World", "Battlegroup", "Settings"]))
+    .block(Block::default().borders(Borders::ALL).title("Worlds"));
+    f.render_widget(table, area);
+}
+
+fn draw_world_detail(f: &mut Frame, app: &App, area: Rect) {
+    let title = app
+        .snapshot
+        .as_ref()
+        .and_then(|snap| snap.battlegroup_title.as_deref())
+        .or(app.cfg.title.as_deref())
+        .unwrap_or("—");
+    let lines = vec![
+        Line::from(Span::styled(
+            title.to_string(),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+        Line::from(format!("Battlegroup: {}", app.cfg.battlegroup)),
+        Line::from(format!("Namespace: {}", app.cfg.namespace)),
+        Line::from(format!("Settings: {}", app.cfg.settings_profile_label())),
+        Line::from(format!("Path: {}", app.cfg.user_settings_dir().display())),
+        Line::from(""),
+        Line::from("Current self-host path: one primary Sietch per World"),
+        Line::from("Primary Sietch: Survival_1"),
+        Line::from("Future multi-Sietch work should target disposable worlds first."),
+        Line::from(""),
+        Line::from("[I] initializes a per-world settings profile"),
+    ];
+    f.render_widget(panel("World Detail", lines), area);
 }
 
 fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
@@ -514,14 +608,16 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
     let view_hint = match app.view {
-        View::Dashboard => "[Tab/2] maps",
-        View::Maps => "[Tab/3] settings",
-        View::Settings => "[Tab/1] dashboard",
+        View::Worlds => "[Tab/2] dashboard",
+        View::Dashboard => "[Tab/3] maps",
+        View::Maps => "[Tab/4] settings",
+        View::Settings => "[Tab/1] worlds",
     };
     let view_actions = match app.view {
         View::Settings => {
-            " [N] name  [P] password  [C] no password  [e] edit  [t] toggle  [a] apply "
+            " [N] name  [P] password  [C] no password  [I] init profile  [e] edit  [t] toggle  [a] apply "
         }
+        View::Worlds => " [I] init profile ",
         _ => " [s/x] map ",
     };
     f.render_widget(
@@ -714,13 +810,28 @@ fn draw_confirmation(f: &mut Frame, app: &App) {
     let Some(action) = app.pending else {
         return;
     };
-    let area = centered_rect(62, 9, f.area());
+    let area = centered_rect(72, 12, f.area());
     let lines = vec![
         Line::from(Span::styled(
             format!("Confirm {}", action.label()),
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(format!(
+            "{} / {}",
+            app.snapshot
+                .as_ref()
+                .and_then(|snap| snap.battlegroup_title.as_deref())
+                .or(app.cfg.title.as_deref())
+                .unwrap_or("selected world"),
+            app.cfg.battlegroup
+        )),
+        Line::from(format!("Namespace: {}", app.cfg.namespace)),
+        Line::from(format!(
+            "Settings: {} ({})",
+            app.cfg.user_settings_dir().display(),
+            app.cfg.settings_profile_label()
         )),
         Line::from(""),
         Line::from(action.risk()),
@@ -757,6 +868,16 @@ fn header_row(labels: Vec<&str>) -> Row<'static> {
 
 fn header_style() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
+}
+
+fn world_settings_profile_exists(battlegroup: &str) -> bool {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/dune".into());
+    std::path::PathBuf::from(home)
+        .join(".dune")
+        .join("worlds")
+        .join(battlegroup)
+        .join("UserSettings")
+        .exists()
 }
 
 fn phase_color(phase: &str) -> Color {
