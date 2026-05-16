@@ -15,6 +15,7 @@ pub struct BattlegroupStatus {
     pub utilities: Vec<UtilityStatus>,
     pub runtime_servers: Vec<RuntimeServer>,
     pub maps: Vec<MapEntry>,
+    pub sietches: Vec<SietchEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +37,23 @@ pub struct MapEntry {
     pub memory_request: Option<String>,
     pub memory_limit: Option<String>,
     pub consistency: MapConsistency,
+}
+
+#[derive(Debug, Clone)]
+pub struct SietchEntry {
+    pub name: String,
+    pub map: String,
+    pub phase: String,
+    pub replicas: u32,
+    pub ready_replicas: Option<u32>,
+    pub target_replicas: Option<u32>,
+    pub players: Option<u32>,
+    pub game_port: Option<u16>,
+    pub partitions: Vec<u32>,
+    pub memory_request: Option<String>,
+    pub memory_limit: Option<String>,
+    pub consistency: MapConsistency,
+    pub primary: bool,
 }
 
 /// Query the BattleGroup CR and return phase + map list.
@@ -64,6 +82,7 @@ pub async fn status(cfg: &Config) -> Result<BattlegroupStatus> {
     let maps = parse_maps(&bg);
     let utilities = parse_utilities(&bg);
     let runtime_servers = parse_runtime_servers(&bg);
+    let sietches = derive_sietches(&maps);
     Ok(BattlegroupStatus {
         phase,
         title,
@@ -73,6 +92,7 @@ pub async fn status(cfg: &Config) -> Result<BattlegroupStatus> {
         utilities,
         runtime_servers,
         maps,
+        sietches,
     })
 }
 
@@ -247,6 +267,27 @@ fn parse_maps(bg: &Value) -> Vec<MapEntry> {
                 sfps: None,
                 consistency: MapConsistency::Unknown,
             })
+        })
+        .collect()
+}
+
+pub fn derive_sietches(maps: &[MapEntry]) -> Vec<SietchEntry> {
+    maps.iter()
+        .filter(|map| map.name == "Survival_1")
+        .map(|map| SietchEntry {
+            name: "Primary Sietch".to_string(),
+            map: map.name.clone(),
+            phase: map.phase.clone(),
+            replicas: map.replicas,
+            ready_replicas: map.ready_replicas,
+            target_replicas: map.target_replicas,
+            players: map.players,
+            game_port: map.game_port,
+            partitions: map.partitions.clone(),
+            memory_request: map.memory_request.clone(),
+            memory_limit: map.memory_limit.clone(),
+            consistency: map.consistency,
+            primary: true,
         })
         .collect()
 }

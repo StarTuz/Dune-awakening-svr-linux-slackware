@@ -24,6 +24,11 @@ pub enum Command {
         #[command(subcommand)]
         action: MapsCommand,
     },
+    /// Sietch view for the selected world
+    Sietches {
+        #[command(subcommand)]
+        action: SietchesCommand,
+    },
     /// Battlegroup lifecycle management
     Battlegroup {
         #[command(subcommand)]
@@ -68,6 +73,12 @@ pub enum MapsCommand {
 }
 
 #[derive(Subcommand)]
+pub enum SietchesCommand {
+    /// List known Sietches in the selected world
+    List,
+}
+
+#[derive(Subcommand)]
 pub enum BattlegroupCommand {
     /// Start the battlegroup
     Start,
@@ -96,6 +107,7 @@ pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
         Command::Worlds { action } => cmd_worlds(action, cfg).await,
         Command::Status => cmd_status(cfg).await,
         Command::Maps { action } => cmd_maps(action, cfg).await,
+        Command::Sietches { action } => cmd_sietches(action, cfg).await,
         Command::Battlegroup { action } => cmd_battlegroup(action, cfg).await,
         Command::Settings { action } => cmd_settings(action, cfg).await,
         Command::Diagnostics => cmd_diagnostics(cfg).await,
@@ -162,6 +174,40 @@ fn world_settings_dir(battlegroup: &str) -> std::path::PathBuf {
         .join("worlds")
         .join(battlegroup)
         .join("UserSettings")
+}
+
+async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
+    match action {
+        SietchesCommand::List => {
+            let snap = HealthSnapshot::collect(cfg).await?;
+            println!(
+                "{:<18} {:<14} {:<12} {:<8} {:<8} {:<6} State",
+                "Sietch", "Map", "Phase", "Ready", "Players", "Port"
+            );
+            println!("{}", "-".repeat(82));
+            for sietch in &snap.sietches {
+                println!(
+                    "{:<18} {:<14} {:<12} {:<8} {:<8} {:<6} {}",
+                    if sietch.primary {
+                        "Primary Sietch"
+                    } else {
+                        &sietch.name
+                    },
+                    sietch.map,
+                    sietch.phase,
+                    format!(
+                        "{}/{}",
+                        opt_u32(sietch.ready_replicas),
+                        opt_u32(sietch.target_replicas)
+                    ),
+                    opt_u32(sietch.players),
+                    opt_u16(sietch.game_port),
+                    sietch.consistency.label()
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
@@ -252,6 +298,18 @@ fn print_check(label: &str, check: &dune_ctl_core::diagnostics::Check) {
         CheckState::Unknown => "unknown",
     };
     println!("{:<22} {:<8} {}", label, prefix, check.message);
+}
+
+fn opt_u32(value: Option<u32>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn opt_u16(value: Option<u16>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "—".to_string())
 }
 
 async fn cmd_status(cfg: &Config) -> Result<()> {

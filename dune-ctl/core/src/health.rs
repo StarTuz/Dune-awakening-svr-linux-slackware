@@ -10,6 +10,7 @@ pub struct HealthSnapshot {
     pub battlegroup_size: Option<u32>,
     pub battlegroup_started_at: Option<String>,
     pub maps: Vec<battlegroup::MapEntry>,
+    pub sietches: Vec<battlegroup::SietchEntry>,
     pub utilities: Vec<battlegroup::UtilityStatus>,
     pub runtime_servers: Vec<battlegroup::RuntimeServer>,
     pub gateway: Option<gateway::GatewayStatus>,
@@ -23,6 +24,7 @@ impl HealthSnapshot {
     pub async fn collect(cfg: &Config) -> Result<Self> {
         let mut bg = battlegroup::status(cfg).await?;
         battlegroup::enrich_maps(cfg, &mut bg.maps).await?;
+        let sietches = battlegroup::derive_sietches(&bg.maps);
 
         let fls_status = fls::check(cfg).await.ok();
         let gateway_status = gateway::status(cfg).await.ok();
@@ -36,6 +38,7 @@ impl HealthSnapshot {
             battlegroup_size: bg.size,
             battlegroup_started_at: bg.start_timestamp,
             maps: bg.maps,
+            sietches,
             utilities: bg.utilities,
             runtime_servers: bg.runtime_servers,
             gateway: gateway_status,

@@ -1,5 +1,5 @@
 use dune_ctl_core::{
-    battlegroup::{MapConsistency, MapEntry},
+    battlegroup::{MapConsistency, MapEntry, SietchEntry},
     diagnostics::{Check, CheckState},
     fls::FlsTokenState,
     health::HealthSnapshot,
@@ -265,7 +265,11 @@ fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
         .split(area);
     let left = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(8), Constraint::Min(8)])
+        .constraints([
+            Constraint::Length(8),
+            Constraint::Length(8),
+            Constraint::Min(8),
+        ])
         .split(columns[0]);
     let right = Layout::default()
         .direction(Direction::Vertical)
@@ -277,10 +281,72 @@ fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
         .split(columns[1]);
 
     draw_overview(f, app.snapshot.as_ref(), left[0]);
-    draw_runtime_servers(f, app.snapshot.as_ref(), left[1]);
+    draw_sietches_panel(f, app.snapshot.as_ref(), left[1]);
+    draw_runtime_servers(f, app.snapshot.as_ref(), left[2]);
     draw_gateway_panel(f, app.snapshot.as_ref(), right[0]);
     draw_diagnostics(f, app.snapshot.as_ref(), right[1]);
     draw_utilities(f, app.snapshot.as_ref(), right[2]);
+}
+
+fn draw_sietches_panel(f: &mut Frame, snap: Option<&HealthSnapshot>, area: Rect) {
+    let sietches = snap.map(|s| s.sietches.as_slice()).unwrap_or(&[]);
+    if sietches.is_empty() {
+        f.render_widget(
+            panel(
+                "Sietches",
+                vec![Line::from("No primary Sietch detected in this world.")],
+            ),
+            area,
+        );
+        return;
+    }
+
+    let rows: Vec<Row> = sietches
+        .iter()
+        .map(|sietch| {
+            Row::new(vec![
+                Cell::from(sietch_name(sietch)),
+                Cell::from(sietch.map.clone()),
+                Cell::from(sietch.phase.clone())
+                    .style(Style::default().fg(phase_color(&sietch.phase))),
+                Cell::from(format!(
+                    "{}/{}",
+                    opt_u32(sietch.ready_replicas),
+                    opt_u32(sietch.target_replicas)
+                )),
+                Cell::from(opt_u32(sietch.players)),
+                Cell::from(opt_u16(sietch.game_port)),
+                Cell::from(sietch.consistency.label())
+                    .style(Style::default().fg(consistency_color(sietch.consistency))),
+            ])
+        })
+        .collect();
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Min(16),
+            Constraint::Length(12),
+            Constraint::Length(10),
+            Constraint::Length(7),
+            Constraint::Length(7),
+            Constraint::Length(6),
+            Constraint::Length(10),
+        ],
+    )
+    .header(header_row(vec![
+        "Sietch", "Map", "Phase", "Ready", "Players", "Port", "State",
+    ]))
+    .block(Block::default().borders(Borders::ALL).title("Sietches"));
+    f.render_widget(table, area);
+}
+
+fn sietch_name(sietch: &SietchEntry) -> String {
+    if sietch.primary {
+        sietch.name.clone()
+    } else {
+        format!("{} ({})", sietch.name, sietch.map)
+    }
 }
 
 fn draw_overview(f: &mut Frame, snap: Option<&HealthSnapshot>, area: Rect) {
