@@ -1,6 +1,6 @@
 # Dune Server Setup — Status
 
-Last updated: 2026-05-15 — Hagga Basin travel fixed; stale nft firewalld table removed
+Last updated: 2026-05-15 — Deep Desert live-state captured; resource snapshot taken; stale nft firewalld table removed
 
 ## Current state ✅
 
@@ -11,9 +11,9 @@ Last updated: 2026-05-15 — Hagga Basin travel fixed; stale nft firewalld table
 | cert-manager | cert-manager, cainjector, webhook | Running |
 | funcom-operators | battlegroupoperator, databaseoperator, serveroperator, utilitiesoperator | Running |
 | funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | postgres, rabbitmq, gateway, director, text-router, filebrowser | Running |
-| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | Survival_1 | Running (~3.3 Gi RSS, 5 Gi req / 12 Gi limit) |
-| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | Overmap | Running (~165 Mi RSS, 200 Mi req / 1 Gi limit, swap-backed) |
-| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | DeepDesert_1 | Stopped cleanly (BattleGroup CR replicas=0, ServerSetScale=0) |
+| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | Survival_1 | Running (~3.5 Gi RSS, 5 Gi req / 12 Gi limit) |
+| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | Overmap | Running (~120 Mi RSS, 200 Mi req / 1 Gi limit, swap-backed) |
+| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | DeepDesert_1 | Running when validating travel/load behavior (~2.0 Gi RSS, 3 Gi req / 10 Gi limit) |
 
 Battlegroup: `sh-db3533a2d5a25fb-xyyxbx` ("Slackware-Arrakis"), Phase: Healthy
 
@@ -21,6 +21,7 @@ Security audit state:
 
 - `~/dune-server/scripts/security-audit.sh` reports the expected public Dune/RMQ ports only.
 - Director, Filebrowser, Postgres, k3s API, and RabbitMQ admin ports stay private behind the host firewall.
+- The audit is still useful after every gateway or update change, because Funcom patches can regenerate the gateway deployment and shift what is exposed.
 
 ## FLS server browser ✅ visible (as of 2026-05-14)
 
@@ -32,7 +33,7 @@ The server only became visible after updating from build `23147813` to `23216207
 
 Probable mechanism: FLS rejects outdated builds from the browser to prevent players from joining incompatible servers. Funcom does not document a minimum build requirement, but the behaviour fits.
 
-**Future debugging**: if the server vanishes from the browser, *first* run `~/dune-server/scripts/update.sh` and wait at least 5 minutes for `DeclareBattlegroupUpdates` to re-fire. Only re-investigate FLS declarations if visibility doesn't return after an update.
+**Future debugging**: if the server vanishes from the browser, *first* run `~/dune-server/scripts/update.sh` and wait at least 5 minutes for `DeclareBattlegroupUpdates` to re-fire. After a Funcom update, allow longer than a plain restart; fresh image pulls and first-run work can push that window past 10 minutes.
 
 ### What was found and fixed
 
@@ -68,7 +69,7 @@ Fix: added `--RMQGameHttpPort=30196` to the gateway Deployment args via JSON pat
 
 1. **`GatewayDeclareFarmStatus`** — gateway, once at startup. Registers the farm: `DatacenterId`, `BattlegroupId`, `DisplayName`, `GameRmqAddress`, `GameRmqHttpAddress`. This is the call that had the `None` bug.
 
-2. **`DeclareBattlegroupUpdates`** — director, ~4 minutes after game server pods start. Triggered when the BGD subsystem (BattlegroupDirectorSubsystem) initializes inside the game server and sends its first `ready=true` ServerState via Admin RMQ to the director. Contains `UpDeclarationsByPartitionId` for Survival_1 (partition 1). **Wait at least 5 minutes** after a battlegroup restart before checking the browser.
+2. **`DeclareBattlegroupUpdates`** — director, ~4 minutes after game server pods start. Triggered when the BGD subsystem (BattlegroupDirectorSubsystem) initializes inside the game server and sends its first `ready=true` ServerState via Admin RMQ to the director. Contains `UpDeclarationsByPartitionId` for Survival_1 (partition 1). **Wait at least 5 minutes** after a battlegroup restart before checking the browser. **After a Funcom update, allow longer** (10+ minutes observed) — fresh image pulls, asset reverification, and longer first-run GC sweeps in the game pod push the BGD-ready timestamp further out than a plain restart. Don't start firewall/FLS diagnosis until the pods have had time to settle.
 
 3. **`HeartbeatUpdatesByPartitionId`** — director, every 8 hours (`FlsServerHeartbeatUpdateFrequencySeconds=28800`). Refreshes the declaration to prevent expiry.
 

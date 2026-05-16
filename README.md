@@ -15,10 +15,11 @@ system shape and control loops. `FILE-LOCATIONS.md` indexes important paths.
 - Public IP: `47.145.51.160`
 - Battlegroup: `sh-db3533a2d5a25fb-xyyxbx` / `Slackware-Arrakis`
 - Namespace: `funcom-seabass-sh-db3533a2d5a25fb-xyyxbx`
-- Current maps: `Survival_1` and `Overmap` running
-- `DeepDesert_1`: cleanly stopped unless explicitly started with `map-toggle.sh`
+- Current maps: `Survival_1`, `Overmap`, and `DeepDesert_1` can all be run together when validating travel/load behavior
 - Server browser: visible in the PTC/Experimental browser
 - Hagga Basin travel: confirmed working after firewall cleanup
+- Platform: Slackware current, kernel `6.18.27`, k3s `v1.36.0+k3s1`
+- Host sizing: 16 GiB RAM with heavy SSD-backed swap; Conan Exiles Enhanced is co-resident on the same machine
 
 ## Important Operational Notes
 
@@ -27,8 +28,9 @@ system shape and control loops. `FILE-LOCATIONS.md` indexes important paths.
   lose `--RMQGameHttpPort=30196`.
 - Start and stop maps only with `~/dune-server/scripts/map-toggle.sh`. Do not
   patch `ServerSet` or `ServerGroup` replicas directly.
-- `DeepDesert_1` must be cleanly on or off. The bad split state is
-  `BattleGroup replicas=1` with `ServerSetScale=0`.
+- `DeepDesert_1` still needs clean coordination between `BattleGroup` and
+  `ServerSetScale`; the bad split state remains `BattleGroup replicas=1` with
+  `ServerSetScale=0`.
 - firewalld must use `FirewallBackend=iptables`. If travel packets are rejected
   despite correct firewalld services, check for stale nft state:
 
@@ -43,6 +45,10 @@ system shape and control loops. `FILE-LOCATIONS.md` indexes important paths.
   nft delete table inet firewalld
   firewall-cmd --reload
   ```
+
+- The current host is not memory-starved in the old sense, but it is swap-heavy
+  by design. Use resource snapshots when you want a real picture of DD load
+  rather than relying on old K3s-era assumptions.
 
 ## Common Commands
 

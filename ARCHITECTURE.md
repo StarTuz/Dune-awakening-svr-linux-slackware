@@ -9,13 +9,27 @@ file describes the stable system shape and the control loops that make it work.
 ## Host Layout
 
 - Host: `arrakis.algieba.org`
-- OS: Slackware 15.0+
+- OS: Slackware 15.0 current
+- Kernel: `6.18.27`
+- k3s: `v1.36.0+k3s1`
 - LAN IP: `192.168.254.200`
 - Public IP: `47.145.51.160`
 - Co-tenant: Conan Exiles Enhanced server
 - Dune user: `dune`
 - Dune repository and server package: `/home/dune/dune-server`
 - Backups: `/srv/backups/dune` and `/srv/backups/conan`
+
+Current host sizing:
+
+- RAM: 16 GiB physical
+- Swap: 62 GiB total, largely SSD-backed
+- Practical operating mode: Dune + Conan can coexist, but memory pressure is normal and swap use is expected
+
+Observed live state on 2026-05-15:
+
+- Character creation, tutorial, Hagga Basin, Harko/Arrakeen, Overmap, and Deep Desert all transitioned successfully after the firewall fix.
+- Deep Desert is being run as a live map while validating travel and load behavior.
+- The older assumption that this deployment needed smaller K3s-era limits is stale; current K3s and operator behavior should be checked against the live cluster instead of inherited notes.
 
 Funcom's supported self-host flow wraps a Linux VM in Windows Pro + Hyper-V.
 This deployment runs the Linux side directly on Slackware: k3s, Funcom's
@@ -108,6 +122,11 @@ than many examples and older self-hosting notes assume, so avoid over-fitting to
 old Kubernetes limitations without checking the live cluster first. Newer k3s
 may support resource fields, CRD behavior, server-side apply semantics, or
 networking defaults that Funcom's older VM scripts did not rely on.
+
+This matters for memory planning too. Earlier notes assumed a smaller or more
+constrained K3s environment. That no longer matches the host: the machine is
+single-node, swap-backed, and comfortable running both game stacks at once, but
+resource snapshots should still be taken when the Deep Desert is active.
 
 Slackware does not use systemd, so the Funcom/OpenRC assumptions are shimmed:
 
