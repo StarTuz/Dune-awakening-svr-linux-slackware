@@ -185,6 +185,33 @@ All items applied. Details in CLAUDE.md § Security.
 | k3s API `bind-address: 127.0.0.1` | ❌ REVERTED — breaks pod→API DNAT; firewall is sufficient |
 | SNMP disabled | ✅ off |
 | FLS token expiry tracking | ✅ in dune-ctl (`token-check`); token expires 2027-05-08, rotate by 2027-04-08 |
+| dune-ctl world targeting | ✅ `worlds list`, `--world`, and per-world settings profiles for PTC/official cutover |
+
+## Future official launch cutover
+
+The current `Slackware-Arrakis` world is a PTC/Experimental BattleGroup. When
+Funcom launches official self-hosting, create a new official world/BattleGroup
+with a new token instead of mutating the PTC world in place.
+
+Planned sequence:
+
+```sh
+# See local PTC/official world specs
+~/dune-server/dune-ctl/target/debug/dune-ctl worlds list
+
+# After official world creation, isolate its local UserSettings profile
+~/dune-server/dune-ctl/target/debug/dune-ctl --world <official-bg> worlds init-settings
+
+# Verify the official world target
+~/dune-server/dune-ctl/target/debug/dune-ctl --world <official-bg> status
+
+# Power down the PTC world after official validation
+~/dune-server/dune-ctl/target/debug/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx battlegroup stop
+```
+
+Do not run both PTC and official worlds live on this 16 GiB host without a port
+and memory plan. Multiple BattleGroups duplicate DB/RMQ/director/gateway stacks
+and can collide on public NodePorts unless templates are adjusted before start.
 
 ## LAN client workaround (defiant / 192.168.254.17)
 
@@ -244,7 +271,7 @@ firewall-cmd --reload
 - [ ] Off-server backup strategy (rsync to NAS / rclone to cloud — TBD)
 - [ ] Create `settings.conf` (`printf '\n\n\n47.145.51.160\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
 - [ ] **Rotate FLS token before 2027-04-08** (expires 2027-05-08) — update BattleGroup CR args (28 occurrences) + re-apply gateway patch
-- [ ] Build dune-ctl (Rust TUI + web) — FLS token expiry warning is planned feature
+- [ ] Continue dune-ctl polishing — multi-world foundation exists; web UI and multi-Sietch research remain future work
 
 ## Bootstrapping fixes applied (fresh cluster workarounds)
 

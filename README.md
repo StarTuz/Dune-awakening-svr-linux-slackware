@@ -58,6 +58,11 @@ system shape and control loops. `FILE-LOCATIONS.md` indexes important paths.
 sudo kubectl get battlegroup -A -o wide
 sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
 
+# dune-ctl world targeting
+~/dune-server/dune-ctl/target/debug/dune-ctl worlds list
+~/dune-server/dune-ctl/target/debug/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx status
+~/dune-server/dune-ctl/target/debug/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx worlds init-settings
+
 # Restart/update
 ~/dune-server/server/scripts/battlegroup.sh restart
 ~/dune-server/scripts/gateway-patch.sh
@@ -92,6 +97,26 @@ sudo ~/dune-server/scripts/system-snapshot.sh known-good-YYYYMMDD
 
 The Dune game UDP range is `7782-7790`. Conan Exiles owns `7777-7778` and other
 ports documented in `CLAUDE.md`, so Dune is kept above that range.
+
+## Multi-World Note
+
+`dune-ctl` is world-aware. It discovers local `~/.dune/<battlegroup>.yaml`
+world specs, ignores backup/dump companion YAMLs, and can target a specific
+world with `--world <battlegroup-or-title>` or `DUNE_CTL_WORLD`.
+
+By default settings use Funcom's shared local defaults in
+`server/scripts/setup/config`. Before managing a second world, initialize a
+per-world settings profile:
+
+```sh
+~/dune-server/dune-ctl/target/debug/dune-ctl --world <bg> worlds init-settings
+```
+
+After that, `settings list/set/apply` for that world uses
+`~/.dune/worlds/<bg>/UserSettings/`. This is intended for the eventual
+PTC-to-official transition: create the official world, initialize its settings
+profile, verify it, then stop the old PTC battlegroup explicitly with
+`dune-ctl --world <ptc-bg> battlegroup stop`.
 
 LAN clients behind the Frontier router need an OUTPUT DNAT rule because the
 router does not provide NAT hairpin:

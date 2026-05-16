@@ -15,6 +15,9 @@ use dune_ctl_core::config::Config;
     version
 )]
 struct Cli {
+    /// Target world/BattleGroup id or title. Defaults to DUNE_CTL_WORLD or first ~/.dune world.
+    #[arg(long, global = true)]
+    world: Option<String>,
     #[command(subcommand)]
     command: Option<cli::Command>,
 }
@@ -22,7 +25,8 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Cli::parse();
-    let cfg = Config::load()?;
+    let world = args.world.or_else(|| std::env::var("DUNE_CTL_WORLD").ok());
+    let cfg = Config::load(world.as_deref())?;
 
     match args.command {
         Some(cmd) => cli::run(cmd, &cfg).await,

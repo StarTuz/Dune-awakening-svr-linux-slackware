@@ -171,6 +171,24 @@ The current namespace is:
 funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
 ```
 
+Operationally, treat the model as three layers:
+
+- **World / BattleGroup**: the top-level persistent world boundary. It owns the
+  namespace, database, shared services, shared maps, and FLS token.
+- **Sietch**: the player-facing Hagga Basin/private server concept. In the
+  current self-host PTC package this maps to the primary `Survival_1` server in
+  one BattleGroup. Future/provider-style hosting may expose multiple Sietches
+  inside a single World, but our current supported path is one primary Sietch
+  per self-hosted World.
+- **Map / partition**: individual runtime game server pods such as
+  `Survival_1`, `Overmap`, `DeepDesert_1`, social hubs, and story/dungeon maps.
+
+`dune-ctl` is intentionally becoming world-aware first. A second official
+world can coexist with the current PTC world as another BattleGroup namespace,
+and commands can target it with `--world <battlegroup-or-title>`. Multiple
+Sietches inside one World should remain an experimental/disposable-world
+research topic until Funcom exposes or documents that self-host path.
+
 ## Battlegroup Runtime Components
 
 Inside the battlegroup namespace:

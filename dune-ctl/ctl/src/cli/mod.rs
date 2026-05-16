@@ -1,12 +1,22 @@
 use anyhow::Result;
 use clap::Subcommand;
 use dune_ctl_core::{
-    battlegroup, config::Config, diagnostics::CheckState, fls::FlsTokenState, gateway,
-    health::HealthSnapshot, maps, settings, update,
+    battlegroup,
+    config::{Config, WorldProfile},
+    diagnostics::CheckState,
+    fls::FlsTokenState,
+    gateway,
+    health::HealthSnapshot,
+    maps, settings, update,
 };
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// List locally known worlds/BattleGroups
+    Worlds {
+        #[command(subcommand)]
+        action: WorldsCommand,
+    },
     /// Show battlegroup status, map phases, FLS token, and RAM
     Status,
     /// Map management
@@ -37,6 +47,14 @@ pub enum Command {
         #[arg(long, default_value = "9090")]
         port: u16,
     },
+}
+
+#[derive(Subcommand)]
+pub enum WorldsCommand {
+    /// List ~/.dune world specs that dune-ctl can target
+    List,
+    /// Create a per-world local UserSettings profile for the selected world
+    InitSettings,
 }
 
 #[derive(Subcommand)]
@@ -75,6 +93,7 @@ pub enum SettingsCommand {
 
 pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
     match cmd {
+        Command::Worlds { action } => cmd_worlds(action, cfg).await,
         Command::Status => cmd_status(cfg).await,
         Command::Maps { action } => cmd_maps(action, cfg).await,
         Command::Battlegroup { action } => cmd_battlegroup(action, cfg).await,
@@ -85,6 +104,64 @@ pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
         Command::TokenCheck => cmd_token_check(cfg).await,
         Command::Web { port } => cmd_web(port, cfg).await,
     }
+}
+
+async fn cmd_worlds(action: WorldsCommand, cfg: &Config) -> Result<()> {
+    match action {
+        WorldsCommand::List => {
+            let worlds = Config::discover_worlds()?;
+            if worlds.is_empty() {
+                println!("No world specs found in ~/.dune.");
+                return Ok(());
+            }
+            println!(
+                "{:<3} {:<30} {:<22} {:<9} Spec",
+                "", "Battlegroup", "Title", "Settings"
+            );
+            println!("{}", "-".repeat(102));
+            for world in worlds {
+                print_world_row(cfg, &world);
+            }
+        }
+        WorldsCommand::InitSettings => {
+            let dir = cfg.init_world_settings()?;
+            println!("World settings profile ready: {}", dir.display());
+            println!(
+                "settings commands now use this profile for {}",
+                cfg.battlegroup
+            );
+        }
+    }
+    Ok(())
+}
+
+fn print_world_row(cfg: &Config, world: &WorldProfile) {
+    let active = if world.battlegroup == cfg.battlegroup {
+        "*"
+    } else {
+        ""
+    };
+    println!(
+        "{:<3} {:<30} {:<22} {:<9} {}",
+        active,
+        world.battlegroup,
+        world.title.as_deref().unwrap_or("—"),
+        if world_settings_dir(&world.battlegroup).exists() {
+            "profile"
+        } else {
+            "shared"
+        },
+        world.spec_path.display()
+    );
+}
+
+fn world_settings_dir(battlegroup: &str) -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/dune".into());
+    std::path::PathBuf::from(home)
+        .join(".dune")
+        .join("worlds")
+        .join(battlegroup)
+        .join("UserSettings")
 }
 
 async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
@@ -129,6 +206,7 @@ async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
             println!("UserEngine.ini and UserGame.ini deployed to /srv/UserSettings.");
         }
     }
+    println!("Local settings: {}", cfg.user_settings_dir().display());
     Ok(())
 }
 
@@ -180,9 +258,17 @@ async fn cmd_status(cfg: &Config) -> Result<()> {
     let snap = HealthSnapshot::collect(cfg).await?;
 
     println!(
+        "World       : {}",
+        snap.battlegroup_title
+            .as_deref()
+            .or(cfg.title.as_deref())
+            .unwrap_or("—")
+    );
+    println!(
         "Battlegroup : {}  Phase: {}",
         cfg.battlegroup, snap.battlegroup_phase
     );
+    println!("Namespace   : {}", cfg.namespace);
 
     if let Some(fls) = &snap.fls {
         println!(
