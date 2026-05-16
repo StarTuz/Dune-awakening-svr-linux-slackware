@@ -106,6 +106,8 @@ pub enum SettingsCommand {
     Diff,
     /// Deploy local UserEngine.ini/UserGame.ini to the filebrowser UserSettings path
     Apply,
+    /// Deploy local settings, then restart the selected world's primary Sietch
+    ApplyRestart,
 }
 
 pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
@@ -281,6 +283,14 @@ async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
         SettingsCommand::Apply => {
             settings::apply(cfg).await?;
             println!("UserEngine.ini and UserGame.ini deployed to /srv/UserSettings.");
+        }
+        SettingsCommand::ApplyRestart => {
+            settings::apply(cfg).await?;
+            sietches::restart_primary(cfg).await?;
+            println!(
+                "UserEngine.ini and UserGame.ini deployed; primary Sietch restart triggered for {}.",
+                selected_world_label(cfg)
+            );
         }
     }
     println!("Local settings: {}", cfg.user_settings_dir().display());

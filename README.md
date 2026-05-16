@@ -124,6 +124,11 @@ PTC self-host package exposes one Sietch per BattleGroup, so
 BattleGroup lifecycle. Keep using `maps start|stop <map>` for individual travel
 maps such as `DeepDesert_1` or story instances.
 
+For Sietch name/password changes, edit locally with `settings set` or the TUI,
+then deploy with `dune-ctl settings apply`. Use
+`dune-ctl settings apply-restart` when you want to deploy both `User*.ini`
+files and immediately restart the selected world's primary Sietch.
+
 LAN clients behind the Frontier router need an OUTPUT DNAT rule because the
 router does not provide NAT hairpin:
 

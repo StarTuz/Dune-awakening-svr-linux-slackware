@@ -281,14 +281,15 @@ fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
         .split(columns[1]);
 
     draw_overview(f, app.snapshot.as_ref(), left[0]);
-    draw_sietches_panel(f, app.snapshot.as_ref(), left[1]);
+    draw_sietches_panel(f, app, left[1]);
     draw_runtime_servers(f, app.snapshot.as_ref(), left[2]);
     draw_gateway_panel(f, app.snapshot.as_ref(), right[0]);
     draw_diagnostics(f, app.snapshot.as_ref(), right[1]);
     draw_utilities(f, app.snapshot.as_ref(), right[2]);
 }
 
-fn draw_sietches_panel(f: &mut Frame, snap: Option<&HealthSnapshot>, area: Rect) {
+fn draw_sietches_panel(f: &mut Frame, app: &App, area: Rect) {
+    let snap = app.snapshot.as_ref();
     let sietches = snap.map(|s| s.sietches.as_slice()).unwrap_or(&[]);
     if sietches.is_empty() {
         f.render_widget(
@@ -300,6 +301,14 @@ fn draw_sietches_panel(f: &mut Frame, snap: Option<&HealthSnapshot>, area: Rect)
         );
         return;
     }
+
+    let display_name = sietch_display_name(app, snap);
+    let password_state = sietch_password_state(app);
+    let title = format!(
+        "Sietches  name:{}  password:{}",
+        compact_title_value(display_name.as_deref().unwrap_or("—"), 28),
+        password_state
+    );
 
     let rows: Vec<Row> = sietches
         .iter()
@@ -337,8 +346,46 @@ fn draw_sietches_panel(f: &mut Frame, snap: Option<&HealthSnapshot>, area: Rect)
     .header(header_row(vec![
         "Sietch", "Map", "Phase", "Ready", "Players", "Port", "State",
     ]))
-    .block(Block::default().borders(Borders::ALL).title("Sietches"));
+    .block(Block::default().borders(Borders::ALL).title(title));
     f.render_widget(table, area);
+}
+
+fn sietch_display_name(app: &App, snap: Option<&HealthSnapshot>) -> Option<String> {
+    let configured = app
+        .settings
+        .iter()
+        .find(|item| item.def.key == "sietch_name")
+        .map(settings::display_value)
+        .filter(|value| value != "—");
+    configured.or_else(|| {
+        snap.and_then(|snap| snap.battlegroup_title.as_deref())
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn sietch_password_state(app: &App) -> &'static str {
+    app.settings
+        .iter()
+        .find(|item| item.def.key == "sietch_password")
+        .map(settings::display_value)
+        .map(|value| {
+            if value == "none" || value == "—" {
+                "none"
+            } else {
+                "set"
+            }
+        })
+        .unwrap_or("unknown")
+}
+
+fn compact_title_value(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut out: String = value.chars().take(max_chars.saturating_sub(3)).collect();
+    out.push_str("...");
+    out
 }
 
 fn sietch_name(sietch: &SietchEntry) -> String {
@@ -681,7 +728,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
     };
     let view_actions = match app.view {
         View::Settings => {
-            " [N] name  [P] password  [C] no password  [I] init profile  [e] edit  [t] toggle  [a] apply "
+            " [N] name  [P] password  [C] no password  [I] init profile  [e] edit  [t] toggle  [a] apply  [D] deploy+restart "
         }
         View::Worlds => " [I] init profile ",
         _ => " [s/x] map ",
@@ -800,6 +847,9 @@ fn draw_settings_detail(f: &mut Frame, app: &App, area: Rect) {
     }
     lines.push(Line::from("[e] edits this setting locally"));
     lines.push(Line::from("[a] deploys both User*.ini files"));
+    lines.push(Line::from(
+        "[D] deploys User*.ini files and restarts the primary Sietch",
+    ));
 
     f.render_widget(
         Paragraph::new(lines)
