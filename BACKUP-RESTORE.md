@@ -52,7 +52,9 @@ sudo ~/dune-server/scripts/resource-snapshot.sh known-good-YYYYMMDD-resources
 
 That writes host memory/swap, process, filesystem, Kubernetes pod/resource,
 serverstats, `kubectl top`, VPA, and game-server memory watcher output under
-`/srv/backups/dune/resource-snapshots/<name>/`.
+`/srv/backups/dune/resource-snapshots/<name>/`. Process command lines are
+redacted because the game server process arguments include service tokens and
+database credentials.
 
 It creates:
 

@@ -8,6 +8,7 @@ SNAP_NAME="${1:-resources-$(date -u +%Y%m%d-%H%M%S)}"
 REPORT_ROOT="${REPORT_ROOT:-/srv/backups/dune/resource-snapshots}"
 REPORT_DIR="$REPORT_ROOT/$SNAP_NAME"
 BATTLEGROUP_PREFIX="funcom-seabass-"
+SWAPON="${SWAPON:-/sbin/swapon}"
 
 usage() {
     cat <<EOF
@@ -18,7 +19,8 @@ Creates:
 
 Captured data includes host memory/swap, top processes, filesystem usage,
 kubectl pod/resource views, serverstats, metrics-server pod usage, and the
-game-server memory watcher output.
+game-server memory watcher output. Process command lines are redacted because
+Funcom game server args include credentials and service tokens.
 EOF
 }
 
@@ -55,7 +57,7 @@ capture_mounts() {
 }
 
 capture_process_memory() {
-    ps -eo pid,user,rss,vsz,pmem,pcpu,cmd --sort=-rss | head -40
+    ps -eo pid,user,rss,vsz,pmem,pcpu,comm --sort=-rss | head -40
 }
 
 capture_kubectl_summary() {
@@ -92,7 +94,11 @@ ns="$(kubectl get ns --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/n
 run_capture uname uname -a
 run_capture uptime uptime
 run_capture free free -h
-run_capture swapon swapon --show
+if [ -x "$SWAPON" ]; then
+    run_capture swapon "$SWAPON" --show
+else
+    run_capture swapon swapon --show
+fi
 run_capture vmstat vmstat 1 5
 run_capture disk df -h
 run_capture mounts capture_mounts
