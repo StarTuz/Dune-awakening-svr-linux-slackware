@@ -78,6 +78,7 @@ swapon --show
 
 # Backups
 ~/dune-server/scripts/dune-backup.sh
+sudo ~/dune-server/scripts/system-snapshot.sh known-good-YYYYMMDD
 ```
 
 ## Networking

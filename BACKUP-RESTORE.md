@@ -32,6 +32,18 @@ Use the host wrapper:
 ~/dune-server/scripts/dune-backup.sh
 ```
 
+For a known-good live system point, use:
+
+```sh
+sudo ~/dune-server/scripts/system-snapshot.sh known-good-YYYYMMDD
+```
+
+That wrapper first runs `dune-backup.sh`, captures status/security evidence
+under `/srv/backups/dune/system-snapshots/<name>/`, then creates read-only btrfs
+snapshots of `/` and `/srv/backups`. The logical database dump remains the clean
+restore artifact for Postgres; the btrfs snapshots preserve the live host,
+server package, k3s local-path data, and backup volume state.
+
 It creates:
 
 ```text
