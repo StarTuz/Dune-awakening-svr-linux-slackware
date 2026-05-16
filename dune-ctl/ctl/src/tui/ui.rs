@@ -49,9 +49,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let snap = app.snapshot.as_ref();
     let phase = snap.map(|s| s.battlegroup_phase.as_str()).unwrap_or("—");
-    let title = snap
-        .and_then(|s| s.battlegroup_title.as_deref())
-        .unwrap_or("dune-ctl");
+    let title = sietch_title(app, snap).unwrap_or("dune-ctl");
     let loading = if app.loading { " [loading]" } else { "" };
 
     let fls_span = snap
@@ -113,6 +111,22 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             .style(Style::default().fg(Color::Yellow)),
         header_chunks[1],
     );
+}
+
+fn sietch_title<'a>(app: &'a App, snap: Option<&'a HealthSnapshot>) -> Option<&'a str> {
+    app.settings
+        .iter()
+        .find(|item| item.def.key == "sietch_name")
+        .and_then(|item| item.value.as_deref())
+        .map(|value| {
+            value
+                .trim()
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .unwrap_or(value.trim())
+        })
+        .filter(|value| !value.is_empty())
+        .or_else(|| snap.and_then(|s| s.battlegroup_title.as_deref()))
 }
 
 fn mascot_line(app: &App) -> &'static str {

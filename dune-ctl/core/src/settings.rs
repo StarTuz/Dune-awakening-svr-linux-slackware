@@ -378,18 +378,30 @@ pub fn display_value(item: &SettingValue) -> String {
         return "—".to_string();
     };
     if !item.def.secret {
+        if item.def.kind == ValueKind::QuotedString {
+            let unquoted = unquote_display(value);
+            return if unquoted.is_empty() {
+                "—".to_string()
+            } else {
+                unquoted.to_string()
+            };
+        }
         return value.to_string();
     }
-    let unquoted = value
-        .trim()
-        .strip_prefix('"')
-        .and_then(|v| v.strip_suffix('"'))
-        .unwrap_or(value.trim());
+    let unquoted = unquote_display(value);
     if unquoted.is_empty() {
         "none".to_string()
     } else {
         "********".to_string()
     }
+}
+
+fn unquote_display(value: &str) -> &str {
+    value
+        .trim()
+        .strip_prefix('"')
+        .and_then(|v| v.strip_suffix('"'))
+        .unwrap_or(value.trim())
 }
 
 fn find_def(key: &str) -> Result<SettingDef> {
