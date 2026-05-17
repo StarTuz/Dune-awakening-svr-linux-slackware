@@ -188,6 +188,7 @@ All items applied. Details in CLAUDE.md § Security.
 | dune-ctl world targeting | ✅ `worlds list`, `--world`, and per-world settings profiles for PTC/official cutover |
 | dune-ctl primary Sietch lifecycle | ✅ `sietches list/start/stop/restart`; start/stop/restart currently map to selected BattleGroup lifecycle |
 | dune-ctl Sietch settings workflow | ✅ TUI shows name/password state and setting drift; `settings status` summarizes local-vs-deployed changes; `settings pull` syncs deployed User*.ini to local; `settings apply`/`apply-restart` require `--force` while drift exists |
+| Slackware-Arrakis settings profile | ✅ per-world profile initialized at `~/.dune/worlds/sh-db3533a2d5a25fb-xyyxbx/UserSettings`; deployed `User*.ini` pulled locally; managed drift clean |
 
 ## Future official launch cutover
 
