@@ -87,6 +87,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         ),
         fls_span,
         ram_span,
+        settings_drift_span(app),
     ]);
     let secondary = Line::from(vec![
         Span::styled("ns:", Style::default().fg(Color::DarkGray)),
@@ -147,6 +148,24 @@ fn sietch_title<'a>(app: &'a App, snap: Option<&'a HealthSnapshot>) -> Option<&'
         })
         .filter(|value| !value.is_empty())
         .or_else(|| snap.and_then(|s| s.battlegroup_title.as_deref()))
+}
+
+fn settings_drift_span(app: &App) -> Span<'static> {
+    let Some(report) = app.settings_drift.as_ref() else {
+        return Span::styled(" Settings:unknown ", Style::default().fg(Color::DarkGray));
+    };
+    if !report.deployed_available {
+        return Span::styled(" Settings:unavailable ", Style::default().fg(Color::Red));
+    }
+    let changed = report.changed_count();
+    if changed == 0 {
+        Span::styled(" Settings:clean ", Style::default().fg(Color::Green))
+    } else {
+        Span::styled(
+            format!(" Settings:{} changed ", changed),
+            Style::default().fg(Color::Yellow),
+        )
+    }
 }
 
 fn mascot_line(app: &App) -> &'static str {
@@ -720,25 +739,18 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
-    let view_hint = match app.view {
-        View::Worlds => "[Tab/2] dashboard",
-        View::Dashboard => "[Tab/3] maps",
-        View::Maps => "[Tab/4] settings",
-        View::Settings => "[Tab/1] worlds",
-    };
-    let view_actions = match app.view {
-        View::Settings => {
-            " [N] name  [P] password  [C] no password  [I] init profile  [e] edit  [t] toggle  [U] pull  [a] apply  [D] deploy+restart "
+    let hint = match app.view {
+        View::Worlds => "[Tab/2] dashboard  [I] init profile  [r] refresh  [q] quit",
+        View::Dashboard => {
+            "[Tab/3] maps  [A/Z/R] primary sietch  [g] gateway  [r] refresh  [q] quit"
         }
-        View::Worlds => " [I] init profile ",
-        _ => " [s/x] map ",
+        View::Maps => "[Tab/4] settings  [s/x] map start/stop  [r] refresh  [q] quit",
+        View::Settings => {
+            "[Tab/1] worlds  [N/P/C] name/pass  [e/t] edit/toggle  [U] pull  [a] apply  [D] deploy+restart  [q] quit"
+        }
     };
     f.render_widget(
-        Paragraph::new(format!(
-            " {}  [A] start primary  [Z] stop primary  [R] restart {} [g] gateway  [r] refresh  [q] quit",
-            view_hint, view_actions
-        ))
-        .style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
         area,
     );
 }
@@ -746,7 +758,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
 fn draw_settings_view(f: &mut Frame, app: &App, area: Rect) {
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
         .split(area);
     draw_settings_table(f, app, columns[0]);
     draw_settings_detail(f, app, columns[1]);
@@ -757,9 +769,7 @@ fn draw_settings_table(f: &mut Frame, app: &App, area: Rect) {
         Cell::from("  Key").style(header_style()),
         Cell::from("Value").style(header_style()),
         Cell::from("Drift").style(header_style()),
-        Cell::from("File").style(header_style()),
         Cell::from("Type").style(header_style()),
-        Cell::from("Label").style(header_style()),
     ]);
 
     let rows: Vec<Row> = app
@@ -784,12 +794,10 @@ fn draw_settings_table(f: &mut Frame, app: &App, area: Rect) {
             };
             Row::new(vec![
                 Cell::from(format!("{}{}", dot, item.def.key)),
-                Cell::from(setting_display_value(app, item)),
+                Cell::from(compact_cell(&setting_display_value(app, item), 18)),
                 Cell::from(setting_drift_label(app, item.def.key))
                     .style(Style::default().fg(setting_drift_color(app, item.def.key))),
-                Cell::from(item.def.file.label()),
                 Cell::from(settings::kind_label(item.def.kind)),
-                Cell::from(item.def.label),
             ])
             .style(row_style)
         })
@@ -798,12 +806,10 @@ fn draw_settings_table(f: &mut Frame, app: &App, area: Rect) {
     let table = Table::new(
         rows,
         [
-            Constraint::Length(30),
-            Constraint::Length(12),
+            Constraint::Min(24),
+            Constraint::Length(18),
             Constraint::Length(9),
-            Constraint::Length(8),
             Constraint::Length(7),
-            Constraint::Min(20),
         ],
     )
     .header(header)
@@ -841,6 +847,7 @@ fn draw_settings_detail(f: &mut Frame, app: &App, area: Rect) {
             setting_deployed_display_value(app, item.def.key)
         )),
         Line::from(format!("Drift: {}", setting_drift_label(app, item.def.key))),
+        Line::from(format!("Source: {}", app.cfg.user_settings_dir().display())),
         Line::from(format!("File: {}", item.def.file.filename())),
         Line::from(format!("Section: [{}]", item.def.section)),
         Line::from(format!("INI key: {}", item.def.ini_key)),
@@ -872,6 +879,16 @@ fn draw_settings_detail(f: &mut Frame, app: &App, area: Rect) {
             .wrap(Wrap { trim: true }),
         area,
     );
+}
+
+fn compact_cell(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let keep = max_chars.saturating_sub(3);
+    let mut out: String = value.chars().take(keep).collect();
+    out.push_str("...");
+    out
 }
 
 fn settings_drift_summary(app: &App) -> String {
