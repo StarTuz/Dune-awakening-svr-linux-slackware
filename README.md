@@ -26,11 +26,15 @@ system shape and control loops. `FILE-LOCATIONS.md` indexes important paths.
 - Re-run `~/dune-server/scripts/gateway-patch.sh` after every battlegroup
   restart or update. The operator can regenerate the gateway deployment and
   lose `--RMQGameHttpPort=30196`.
-- Start and stop maps only with `~/dune-server/scripts/map-toggle.sh`. Do not
-  patch `ServerSet` or `ServerGroup` replicas directly.
-- `DeepDesert_1` still needs clean coordination between `BattleGroup` and
-  `ServerSetScale`; the bad split state remains `BattleGroup replicas=1` with
-  `ServerSetScale=0`.
+- Start and stop maps only with `~/dune-server/scripts/map-toggle.sh` or
+  `dune-ctl maps start|stop`. Do not patch `ServerSet` or `ServerGroup`
+  replicas directly.
+- Dedicated-scaled maps, including social hubs and most story/CB maps, need
+  clean coordination between `BattleGroup`, `ServerSet`, and `ServerSetScale`.
+  The bad split states are `BattleGroup replicas=1` with `ServerSetScale=0`,
+  or `ServerSetScale.replicas=1` without the matching
+  `ServerSetScale.partitions`. Both can leave maps absent, stuck in startup, or
+  using the wrong pod/partition index.
 - firewalld must use `FirewallBackend=iptables`. If travel packets are rejected
   despite correct firewalld services, check for stale nft state:
 
@@ -78,6 +82,8 @@ sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db353
 ~/dune-server/scripts/map-toggle.sh list
 ~/dune-server/scripts/map-toggle.sh start DeepDesert_1
 ~/dune-server/scripts/map-toggle.sh stop DeepDesert_1
+~/dune-server/dune-ctl/target/debug/dune-ctl maps start SH_Arrakeen
+~/dune-server/dune-ctl/target/debug/dune-ctl maps stop SH_Arrakeen
 ~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis maps list
 ~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis maps start DeepDesert_1
 ~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis maps stop DeepDesert_1

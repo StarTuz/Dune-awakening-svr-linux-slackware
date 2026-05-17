@@ -73,7 +73,12 @@ pub enum MapsCommand {
     /// List all 28 maps with current phase
     List,
     /// Start a stopped map
-    Start { name: String },
+    Start {
+        name: String,
+        /// Override the social-hub guard (SH_* maps are director-managed)
+        #[arg(long)]
+        force: bool,
+    },
     /// Stop a running map
     Stop { name: String },
 }
@@ -764,9 +769,9 @@ async fn cmd_maps(action: MapsCommand, cfg: &Config) -> Result<()> {
                 println!("{} {}  ({})", dot, map.name, map.phase);
             }
         }
-        MapsCommand::Start { name } => {
+        MapsCommand::Start { name, force } => {
             println!("Starting {}...", name);
-            maps::start(cfg, &name).await?;
+            maps::start(cfg, &name, force).await?;
             println!("{}: start triggered.", name);
             print_target_summary(cfg);
         }

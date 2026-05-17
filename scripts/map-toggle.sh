@@ -146,9 +146,14 @@ fi
 # 2. Patch the ServerSetScale if it exists (final pod-creation trigger for maps
 #    that were stopped at cluster start; maps that were running do not have one)
 if sudo kubectl get serversetscale "$SCALE" -n "$NS" &>/dev/null; then
+    SCALE_PATCH="[{\"op\":\"replace\",\"path\":\"/spec/replicas\",\"value\":${REPLICAS}}]"
+    if [[ "$CMD" == "start" ]]; then
+        SCALE_PATCH="[{\"op\":\"add\",\"path\":\"/spec/partitions\",\"value\":${PARTITIONS}},{\"op\":\"replace\",\"path\":\"/spec/replicas\",\"value\":${REPLICAS}}]"
+    fi
+
     sudo kubectl patch serversetscale "$SCALE" -n "$NS" \
       --type='json' \
-      -p="[{\"op\":\"replace\",\"path\":\"/spec/replicas\",\"value\":${REPLICAS}}]"
+      -p="$SCALE_PATCH"
     echo "ServerSetScale patched."
 else
     echo "No ServerSetScale for $MAP — BattleGroup CR patch is sufficient."

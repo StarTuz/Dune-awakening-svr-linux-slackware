@@ -354,7 +354,7 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('s') => {
             if let Some(name) = selected_map(app) {
                 app.push_log(format!("starting {}...", name));
-                match maps::start(&app.cfg, &name).await {
+                match maps::start(&app.cfg, &name, false).await {
                     Ok(()) => {
                         app.push_log(format!("{}: start triggered", name));
                         app.push_target_log();

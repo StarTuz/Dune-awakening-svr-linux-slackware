@@ -240,6 +240,10 @@ BattleGroup
 
 The important subtlety is `ServerSetScale`: it is the final pod-creation
 trigger and does not always follow higher-level replica patches automatically.
+When `ServerSet.spec.dedicatedScaling` is enabled, `ServerSetScale` can also
+overwrite matching `ServerSet` fields. That means a dynamic map start must keep
+`ServerSetScale.spec.partitions` aligned with `ServerSet.spec.partitions`, not
+just set `ServerSetScale.spec.replicas`.
 
 Use:
 
@@ -250,22 +254,28 @@ Use:
 
 Do not directly patch `ServerSet` or `ServerGroup` replicas.
 
-Bad split state:
+Bad split states:
 
 ```text
 BattleGroup replicas=1
 ServerSetScale=0
+
+ServerSet partitions=[3]
+ServerSetScale replicas=1
+ServerSetScale partitions=[]
 ```
 
-That leaves a map logically desired but physically absent. It can make the
-battlegroup report a larger size than the actual farm and produce confusing S2S
-farm-size or partition log noise.
+The first leaves a map logically desired but physically absent. The second can
+spawn the right map with the wrong dynamic partition/ordinal, e.g. a social hub
+as `pod-0` while the game needs partition 3 or 4. Both can make the battlegroup
+report a larger size than the actual farm and produce confusing S2S farm-size,
+startup, or partition log noise.
 
 Good states:
 
 ```text
-off: BattleGroup replicas=0, ServerSetScale=0
-on:  BattleGroup replicas=1, ServerSetScale=1, ServerSet READY=1
+off: BattleGroup replicas=0, ServerSetScale replicas=0
+on:  BattleGroup replicas=1, ServerSetScale replicas=1, matching partitions, ServerSet READY=1
 ```
 
 ## Current Map Strategy
@@ -278,8 +288,8 @@ Normal low-footprint runtime:
 - social/story/CB/DLC maps: off unless needed
 
 Deep Desert and social-zone travel should be tested by cleanly starting the
-target map, verifying `ServerSet` and `ServerSetScale`, then watching current
-ports and memory.
+target map, verifying `ServerSet` and `ServerSetScale` replicas and partitions,
+then watching current ports and memory.
 
 ## FLS and Travel Flow
 

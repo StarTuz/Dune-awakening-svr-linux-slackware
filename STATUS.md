@@ -149,7 +149,9 @@ Overmap's *request* is 200 Mi (swap mode) but actual RSS is ~165 Mi. Survival_1 
 ~/dune-server/scripts/map-toggle.sh stop  DeepDesert_1
 ```
 
-**Important:** Do not patch `ServerSet` or `ServerGroup` replicas directly. Starting a map requires patching both the `BattleGroup CR` and the `ServerSetScale` — `map-toggle.sh` handles both. Patching only the BattleGroup CR leaves the map stuck in `Stopped` phase because `ServerSetScale` (the final pod-creation trigger) does not auto-update.
+**Important:** Do not patch `ServerSet` or `ServerGroup` replicas directly. Starting a map requires patching both the `BattleGroup CR` and the `ServerSetScale` — `map-toggle.sh` and `dune-ctl maps start|stop` handle both. Patching only the BattleGroup CR leaves the map stuck in `Stopped` phase because `ServerSetScale` (the final pod-creation trigger) does not auto-update.
+
+For dedicated-scaled maps, `ServerSetScale.spec.partitions` must also be patched on start. If `ServerSet` has `partitions: [3]` but `ServerSetScale` has `replicas: 1` and no `partitions`, the operator can create the right map with the wrong dynamic pod/partition path. This caused the 2026-05-17 social hub regression: Arrakeen/Harko started as `pod-0` or stayed in startup until the start tooling was fixed to patch both `replicas` and `partitions`.
 
 After a k3s restart, maps do not come back automatically — use `map-toggle.sh start` or `battlegroup.sh restart` (followed by `gateway-patch.sh`).
 
@@ -260,6 +262,38 @@ firewall-cmd --reload
 **Do not use the old S2S-window workaround**: `scripts/s2s-watchdog.sh` was removed. The previous theory that players had to connect during a short Farm-session window was wrong for this incident.
 
 **Related cleanup**: DeepDesert_1 was also corrected to a clean stopped state (`BattleGroup replicas=0`, `ServerSetScale=0`). The previous split state (`replicas=1`, `ServerSetScale=0`) caused confusing farm-size/partition-8 noise in logs and should not be treated as normal.
+
+## 2026-05-17 reboot/memory-upgrade recovery
+
+After the RAM upgrade/reboot, the host reported about 58.9 GB usable memory and the Dune stack fit comfortably with Survival_1 + Overmap around 27 GB total host RAM in use. k3s and the game pods came back, but several control-plane and map lifecycle issues were exposed.
+
+**Scheduler fix**: `scripts/memory-focused-scheduler.sh` now resolves the Kubernetes node inside its loop instead of once at startup. If the scheduler starts before k3s publishes a node, it now logs `waiting for Kubernetes node` instead of trying to bind pods with an empty node name.
+
+**Social hub regression**: while fixing hub crash loops, the start path initially patched `BattleGroup`/`ServerSet` partitions but not `ServerSetScale.partitions`. For dedicated-scaled maps, `ServerSetScale` overwrites matching ServerSet settings. The corrected behavior is:
+
+```text
+SH_Arrakeen:     ServerSetScale replicas=1, partitions=[3]
+SH_HarkoVillage: ServerSetScale replicas=1, partitions=[4]
+```
+
+Both `scripts/map-toggle.sh` and `dune-ctl/core/src/maps.rs` were updated so `start` patches `ServerSetScale.spec.partitions` before `replicas`. `cargo fmt`, `cargo check`, and `bash -n scripts/map-toggle.sh` passed.
+
+**Recovery actions performed**:
+
+- Rebuilt `dune-ctl`.
+- Restarted battlegroup director, server gateway, and text router.
+- Started Arrakeen/Harko with corrected scaler partitions; pods came up as `sg-sh-arrakeen-pod-3` and `sg-sh-harkovillage-pod-4`.
+- Restarted Survival_1 and Overmap game pods to refresh farm leadership.
+- Director then powered down social hubs because `MinServers = 0` and no travel queue required them, so hub requested replicas were cleaned back to 0.
+
+**Final live state after cleanup**:
+
+- BattleGroup `Healthy`, size 2.
+- `Survival_1` Running, ready, partition 1.
+- `Overmap` Running, ready, partition 2.
+- Social hubs stopped cleanly at 0.
+- Director population declaration recovered from `BattlegroupMaxPlayerCapacity: 0` to `60`.
+- Note: director still publishes `PasswordProtected {"Survival_1_0": true}` while `Bgd.ServerLoginPassword` remains set; clear the password only if testing browser visibility/filter behavior.
 
 ## What still needs doing
 

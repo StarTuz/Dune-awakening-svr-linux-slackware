@@ -2,10 +2,16 @@
 # Passthrough scheduler for pods requesting memory-focused-scheduler.
 # Runs on the host; binds pending pods to the single k3s node.
 SCHED_NAME="memory-focused-scheduler"
-NODE=$(sudo kubectl get node -o jsonpath='{.items[0].metadata.name}')
-echo "$(date -Iseconds) memory-focused-scheduler started (node=$NODE)"
+echo "$(date -Iseconds) memory-focused-scheduler started"
 
 while true; do
+    NODE=$(sudo kubectl get node -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [ -z "$NODE" ]; then
+        echo "$(date -Iseconds) waiting for Kubernetes node"
+        sleep 5
+        continue
+    fi
+
     sudo kubectl get pods -A -o json 2>/dev/null | python3 -c "
 import sys, json, subprocess, tempfile, os
 
