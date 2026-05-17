@@ -188,6 +188,7 @@ All items applied. Details in CLAUDE.md § Security.
 | dune-ctl world targeting | ✅ `worlds list`, `--world`, and per-world settings profiles for PTC/official cutover |
 | dune-ctl primary Sietch lifecycle | ✅ `sietches list/start/stop/restart`; start/stop/restart currently map to selected BattleGroup lifecycle |
 | dune-ctl Sietch settings workflow | ✅ TUI shows name/password state and setting drift; `settings status` summarizes local-vs-deployed changes; `settings pull` syncs deployed User*.ini to local; `settings apply`/`apply-restart` require `--force` while drift exists |
+| dune-ctl preflight | ✅ `preflight` checks firewall backend, stale nft table, gateway patch, FLS token, primary Sietch, settings drift, and RAM; `--strict` fails on warnings |
 | Slackware-Arrakis settings profile | ✅ per-world profile initialized at `~/.dune/worlds/sh-db3533a2d5a25fb-xyyxbx/UserSettings`; deployed `User*.ini` pulled locally; managed drift clean |
 
 ## Future official launch cutover
@@ -277,8 +278,9 @@ firewall-cmd --reload
 - [x] dune-ctl operational polish — world targeting, primary Sietch lifecycle,
   settings drift guard, per-world settings profile, and TUI settings polish are
   in place
-- [ ] Future dune-ctl work — web UI, combined preflight command, and
-  multi-Sietch research remain optional/future work
+- [x] dune-ctl combined preflight command
+- [ ] Future dune-ctl work — web UI and multi-Sietch research remain
+  optional/future work
 
 ## Bootstrapping fixes applied (fresh cluster workarounds)
 

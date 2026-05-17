@@ -61,6 +61,7 @@ sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db353
 # dune-ctl world targeting
 ~/dune-server/dune-ctl/target/debug/dune-ctl worlds list
 ~/dune-server/dune-ctl/target/debug/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx status
+~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis preflight
 ~/dune-server/dune-ctl/target/debug/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx worlds init-settings
 ~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis sietches list
 ~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis settings status
@@ -168,6 +169,8 @@ Examples below use `dune-ctl`; replace that with
 # World and health
 dune-ctl worlds list
 dune-ctl --world Slackware-Arrakis status
+dune-ctl --world Slackware-Arrakis preflight
+dune-ctl --world Slackware-Arrakis preflight --strict
 dune-ctl --world Slackware-Arrakis diagnostics
 dune-ctl --world Slackware-Arrakis token-check
 

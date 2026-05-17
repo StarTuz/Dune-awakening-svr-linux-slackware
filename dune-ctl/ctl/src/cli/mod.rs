@@ -19,6 +19,12 @@ pub enum Command {
     },
     /// Show battlegroup status, map phases, FLS token, and RAM
     Status,
+    /// Run a compact go/no-go preflight for the selected world
+    Preflight {
+        /// Treat warnings as failures
+        #[arg(long)]
+        strict: bool,
+    },
     /// Map management
     Maps {
         #[command(subcommand)]
@@ -126,6 +132,7 @@ pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
     match cmd {
         Command::Worlds { action } => cmd_worlds(action, cfg).await,
         Command::Status => cmd_status(cfg).await,
+        Command::Preflight { strict } => cmd_preflight(cfg, strict).await,
         Command::Maps { action } => cmd_maps(action, cfg).await,
         Command::Sietches { action } => cmd_sietches(action, cfg).await,
         Command::Battlegroup { action } => cmd_battlegroup(action, cfg).await,
@@ -449,6 +456,247 @@ fn print_check(label: &str, check: &dune_ctl_core::diagnostics::Check) {
         CheckState::Unknown => "unknown",
     };
     println!("{:<22} {:<8} {}", label, prefix, check.message);
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreflightState {
+    Ok,
+    Warn,
+    Fail,
+}
+
+impl PreflightState {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Ok => "OK",
+            Self::Warn => "WARN",
+            Self::Fail => "FAIL",
+        }
+    }
+}
+
+struct PreflightRow {
+    label: &'static str,
+    state: PreflightState,
+    message: String,
+}
+
+impl PreflightRow {
+    fn ok(label: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            label,
+            state: PreflightState::Ok,
+            message: message.into(),
+        }
+    }
+
+    fn warn(label: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            label,
+            state: PreflightState::Warn,
+            message: message.into(),
+        }
+    }
+
+    fn fail(label: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            label,
+            state: PreflightState::Fail,
+            message: message.into(),
+        }
+    }
+}
+
+async fn cmd_preflight(cfg: &Config, strict: bool) -> Result<()> {
+    let snap = HealthSnapshot::collect(cfg).await?;
+    let settings_drift = settings::drift(cfg).await?;
+    let mut rows = Vec::new();
+
+    rows.push(match snap.diagnostics.firewall_backend.state {
+        CheckState::Ok => PreflightRow::ok(
+            "firewall backend",
+            &snap.diagnostics.firewall_backend.message,
+        ),
+        CheckState::Warning => PreflightRow::warn(
+            "firewall backend",
+            &snap.diagnostics.firewall_backend.message,
+        ),
+        CheckState::Critical => PreflightRow::fail(
+            "firewall backend",
+            &snap.diagnostics.firewall_backend.message,
+        ),
+        CheckState::Unknown => PreflightRow::warn(
+            "firewall backend",
+            &snap.diagnostics.firewall_backend.message,
+        ),
+    });
+
+    rows.push(match snap.diagnostics.stale_nft_firewalld.state {
+        CheckState::Ok => {
+            PreflightRow::ok("stale nft", &snap.diagnostics.stale_nft_firewalld.message)
+        }
+        CheckState::Warning => {
+            PreflightRow::warn("stale nft", &snap.diagnostics.stale_nft_firewalld.message)
+        }
+        CheckState::Critical => {
+            PreflightRow::fail("stale nft", &snap.diagnostics.stale_nft_firewalld.message)
+        }
+        CheckState::Unknown => {
+            PreflightRow::warn("stale nft", &snap.diagnostics.stale_nft_firewalld.message)
+        }
+    });
+
+    rows.push(match &snap.gateway {
+        Some(gateway) if gateway.patched => {
+            PreflightRow::ok("gateway patch", "--RMQGameHttpPort=30196 present")
+        }
+        Some(_) => PreflightRow::fail("gateway patch", "--RMQGameHttpPort=30196 missing"),
+        None => PreflightRow::warn("gateway patch", "gateway deployment status unavailable"),
+    });
+
+    rows.push(match &snap.fls {
+        Some(fls) => match fls.state {
+            FlsTokenState::Ok => PreflightRow::ok(
+                "FLS token",
+                format!(
+                    "{}; expires {}",
+                    fls.label(),
+                    fls.expires_at.format("%Y-%m-%d")
+                ),
+            ),
+            FlsTokenState::WarningSoon => PreflightRow::warn(
+                "FLS token",
+                format!(
+                    "{}; expires {}",
+                    fls.label(),
+                    fls.expires_at.format("%Y-%m-%d")
+                ),
+            ),
+            FlsTokenState::Critical | FlsTokenState::Expired => PreflightRow::fail(
+                "FLS token",
+                format!(
+                    "{}; expires {}",
+                    fls.label(),
+                    fls.expires_at.format("%Y-%m-%d")
+                ),
+            ),
+        },
+        None => PreflightRow::warn("FLS token", "token status unavailable"),
+    });
+
+    rows.push(match snap.sietches.iter().find(|sietch| sietch.primary) {
+        Some(sietch)
+            if sietch.phase == "Running"
+                && sietch.ready_replicas.unwrap_or_default() > 0
+                && sietch.consistency == battlegroup::MapConsistency::CleanOn =>
+        {
+            PreflightRow::ok(
+                "primary Sietch",
+                format!(
+                    "{} running ready {}/{}",
+                    sietch.map,
+                    opt_u32(sietch.ready_replicas),
+                    opt_u32(sietch.target_replicas)
+                ),
+            )
+        }
+        Some(sietch) if snap.battlegroup_stopped => PreflightRow::warn(
+            "primary Sietch",
+            format!("battlegroup stopped; {} phase {}", sietch.map, sietch.phase),
+        ),
+        Some(sietch) => PreflightRow::warn(
+            "primary Sietch",
+            format!(
+                "{} phase {} ready {}/{} state {}",
+                sietch.map,
+                sietch.phase,
+                opt_u32(sietch.ready_replicas),
+                opt_u32(sietch.target_replicas),
+                sietch.consistency.label()
+            ),
+        ),
+        None => PreflightRow::fail("primary Sietch", "primary Sietch not found"),
+    });
+
+    rows.push(if settings_drift.deployed_available {
+        let changed = settings_drift.changed_count();
+        if changed == 0 {
+            PreflightRow::ok("settings drift", "0 changed managed setting(s)")
+        } else {
+            PreflightRow::warn(
+                "settings drift",
+                format!(
+                    "{} changed managed setting(s); review before deploy",
+                    changed
+                ),
+            )
+        }
+    } else {
+        PreflightRow::warn(
+            "settings drift",
+            settings_drift
+                .error
+                .clone()
+                .unwrap_or_else(|| "deployed settings unavailable".to_string()),
+        )
+    });
+
+    rows.push(match (snap.ram_used_bytes, snap.ram_total_bytes) {
+        (Some(used), Some(total)) => {
+            let pct = (used as f64 / total as f64) * 100.0;
+            let message = format!(
+                "{:.1}/{:.1} GB used ({:.0}%)",
+                used as f64 / 1e9,
+                total as f64 / 1e9,
+                pct
+            );
+            if pct >= 95.0 {
+                PreflightRow::warn("RAM", message)
+            } else {
+                PreflightRow::ok("RAM", message)
+            }
+        }
+        _ => PreflightRow::warn("RAM", "memory status unavailable"),
+    });
+
+    println!("Preflight for {}", selected_world_label(cfg));
+    println!("Battlegroup : {}", cfg.battlegroup);
+    println!("Namespace   : {}", cfg.namespace);
+    println!();
+    for row in &rows {
+        println!("{:<16} {:<5} {}", row.label, row.state.label(), row.message);
+    }
+
+    let fail_count = rows
+        .iter()
+        .filter(|row| row.state == PreflightState::Fail)
+        .count();
+    let warn_count = rows
+        .iter()
+        .filter(|row| row.state == PreflightState::Warn)
+        .count();
+
+    println!();
+    if fail_count > 0 {
+        println!(
+            "Summary: FAIL ({} blocker(s), {} warning(s))",
+            fail_count, warn_count
+        );
+        anyhow::bail!("preflight failed");
+    }
+    if strict && warn_count > 0 {
+        println!(
+            "Summary: WARN ({} warning(s); --strict enabled)",
+            warn_count
+        );
+        anyhow::bail!("preflight warnings in strict mode");
+    }
+    if warn_count > 0 {
+        println!("Summary: WARN ({} warning(s), no blockers)", warn_count);
+    } else {
+        println!("Summary: OK");
+    }
+    Ok(())
 }
 
 fn opt_u32(value: Option<u32>) -> String {
