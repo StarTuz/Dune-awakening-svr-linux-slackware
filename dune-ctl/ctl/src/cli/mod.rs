@@ -162,6 +162,7 @@ async fn cmd_worlds(action: WorldsCommand, cfg: &Config) -> Result<()> {
                 "settings commands now use this profile for {}",
                 cfg.battlegroup
             );
+            print_target_summary(cfg);
         }
     }
     Ok(())
@@ -232,6 +233,7 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
                 "Primary Sietch start triggered for {}.",
                 selected_world_label(cfg)
             );
+            print_target_summary(cfg);
         }
         SietchesCommand::Stop => {
             sietches::stop_primary(cfg).await?;
@@ -239,6 +241,7 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
                 "Primary Sietch stop triggered for {}.",
                 selected_world_label(cfg)
             );
+            print_target_summary(cfg);
         }
         SietchesCommand::Restart => {
             sietches::restart_primary(cfg).await?;
@@ -246,6 +249,8 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
                 "Primary Sietch restart triggered for {}.",
                 selected_world_label(cfg)
             );
+            print_target_summary(cfg);
+            println!("Follow-up   : verify gateway patch and server browser after rollout.");
         }
     }
     Ok(())
@@ -253,6 +258,17 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
 
 fn selected_world_label(cfg: &Config) -> String {
     cfg.title.as_deref().unwrap_or(&cfg.battlegroup).to_string()
+}
+
+fn print_target_summary(cfg: &Config) {
+    println!("World       : {}", selected_world_label(cfg));
+    println!("Battlegroup : {}", cfg.battlegroup);
+    println!("Namespace   : {}", cfg.namespace);
+    println!(
+        "Settings    : {} ({})",
+        cfg.user_settings_dir().display(),
+        cfg.settings_profile_label()
+    );
 }
 
 async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
@@ -281,6 +297,7 @@ async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
                 "{} updated locally. Run `dune-ctl settings apply` to deploy.",
                 key
             );
+            print_target_summary(cfg);
         }
         SettingsCommand::Toggle { key } => {
             let value = settings::toggle(cfg, &key).await?;
@@ -288,6 +305,7 @@ async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
                 "{} toggled to {} locally. Run `dune-ctl settings apply` to deploy.",
                 key, value
             );
+            print_target_summary(cfg);
         }
         SettingsCommand::Status => {
             let drift = settings::drift(cfg).await?;
@@ -323,11 +341,14 @@ async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
             println!(
                 "Deployed UserEngine.ini and UserGame.ini copied into local settings profile."
             );
+            print_target_summary(cfg);
         }
         SettingsCommand::Apply { force } => {
             guard_settings_apply(cfg, force).await?;
             settings::apply(cfg).await?;
             println!("UserEngine.ini and UserGame.ini deployed to /srv/UserSettings.");
+            print_target_summary(cfg);
+            println!("Follow-up   : restart primary Sietch if the changed settings require it.");
         }
         SettingsCommand::ApplyRestart { force } => {
             guard_settings_apply(cfg, force).await?;
@@ -337,6 +358,8 @@ async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
                 "UserEngine.ini and UserGame.ini deployed; primary Sietch restart triggered for {}.",
                 selected_world_label(cfg)
             );
+            print_target_summary(cfg);
+            println!("Follow-up   : verify gateway patch and server browser after rollout.");
         }
     }
     println!("Local settings: {}", cfg.user_settings_dir().display());
@@ -385,14 +408,18 @@ async fn cmd_battlegroup(action: BattlegroupCommand, cfg: &Config) -> Result<()>
         BattlegroupCommand::Start => {
             battlegroup::start(cfg).await?;
             println!("Battlegroup start triggered.");
+            print_target_summary(cfg);
         }
         BattlegroupCommand::Stop => {
             battlegroup::stop(cfg).await?;
             println!("Battlegroup stop triggered.");
+            print_target_summary(cfg);
         }
         BattlegroupCommand::Restart => {
             battlegroup::restart(cfg).await?;
             println!("Battlegroup restart triggered.");
+            print_target_summary(cfg);
+            println!("Follow-up   : verify gateway patch and server browser after rollout.");
         }
     }
     Ok(())
@@ -493,11 +520,13 @@ async fn cmd_maps(action: MapsCommand, cfg: &Config) -> Result<()> {
             println!("Starting {}...", name);
             maps::start(cfg, &name).await?;
             println!("{}: start triggered.", name);
+            print_target_summary(cfg);
         }
         MapsCommand::Stop { name } => {
             println!("Stopping {}...", name);
             maps::stop(cfg, &name).await?;
             println!("{}: stop triggered.", name);
+            print_target_summary(cfg);
         }
     }
     Ok(())
@@ -515,6 +544,7 @@ async fn cmd_gateway_patch(cfg: &Config) -> Result<()> {
         true => println!("gateway: --RMQGameHttpPort=30196 applied."),
         false => println!("gateway: already patched, nothing to do."),
     }
+    print_target_summary(cfg);
     Ok(())
 }
 

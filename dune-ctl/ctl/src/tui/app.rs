@@ -141,6 +141,22 @@ impl App {
             self.log.pop_front();
         }
     }
+
+    fn push_target_log(&mut self) {
+        self.push_log(format!(
+            "target {} / {}",
+            self.cfg
+                .title
+                .as_deref()
+                .unwrap_or(self.cfg.battlegroup.as_str()),
+            self.cfg.namespace
+        ));
+        self.push_log(format!(
+            "settings {} ({})",
+            self.cfg.user_settings_dir().display(),
+            self.cfg.settings_profile_label()
+        ));
+    }
 }
 
 pub async fn run_loop<B: Backend>(terminal: &mut Terminal<B>, cfg: &Config) -> Result<()> {
@@ -341,6 +357,7 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 match maps::start(&app.cfg, &name).await {
                     Ok(()) => {
                         app.push_log(format!("{}: start triggered", name));
+                        app.push_target_log();
                         start_refresh(app);
                     }
                     Err(e) => app.push_log(format!("start error: {:#}", e)),
@@ -353,6 +370,7 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 match maps::stop(&app.cfg, &name).await {
                     Ok(()) => {
                         app.push_log(format!("{}: stop triggered", name));
+                        app.push_target_log();
                         start_refresh(app);
                     }
                     Err(e) => app.push_log(format!("stop error: {:#}", e)),
@@ -362,8 +380,14 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('g') => {
             app.push_log("applying gateway patch...");
             match gateway::patch(&app.cfg).await {
-                Ok(true) => app.push_log("gateway: --RMQGameHttpPort=30196 applied"),
-                Ok(false) => app.push_log("gateway: already patched"),
+                Ok(true) => {
+                    app.push_log("gateway: --RMQGameHttpPort=30196 applied");
+                    app.push_target_log();
+                }
+                Ok(false) => {
+                    app.push_log("gateway: already patched");
+                    app.push_target_log();
+                }
                 Err(e) => app.push_log(format!("gateway patch error: {:#}", e)),
             }
         }
@@ -475,6 +499,15 @@ async fn execute_pending(app: &mut App) {
     match result {
         Ok(()) => {
             app.push_log(format!("{} triggered", action.label()));
+            app.push_target_log();
+            if matches!(
+                action,
+                PendingAction::RestartSietch | PendingAction::ApplySettingsAndRestart
+            ) {
+                app.push_log("follow-up: verify gateway patch and server browser");
+            } else if action == PendingAction::ApplySettings {
+                app.push_log("follow-up: restart primary Sietch if settings require it");
+            }
             app.worlds = Config::discover_worlds().unwrap_or_default();
             start_refresh(app);
         }
