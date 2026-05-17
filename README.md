@@ -62,6 +62,8 @@ sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db353
 ~/dune-server/dune-ctl/target/debug/dune-ctl worlds list
 ~/dune-server/dune-ctl/target/debug/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx status
 ~/dune-server/dune-ctl/target/debug/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx worlds init-settings
+~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis sietches list
+~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis settings status
 
 # Restart/update
 ~/dune-server/server/scripts/battlegroup.sh restart
@@ -75,6 +77,9 @@ sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db353
 ~/dune-server/scripts/map-toggle.sh list
 ~/dune-server/scripts/map-toggle.sh start DeepDesert_1
 ~/dune-server/scripts/map-toggle.sh stop DeepDesert_1
+~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis maps list
+~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis maps start DeepDesert_1
+~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis maps stop DeepDesert_1
 
 # Firewall sanity
 grep -n '^FirewallBackend' /etc/firewalld/firewalld.conf
@@ -134,6 +139,64 @@ the deployed copy is the source of truth, sync it back into the local profile
 with `dune-ctl settings pull` before making more edits. `settings apply` and
 `settings apply-restart` refuse to overwrite deployed managed settings while
 drift exists unless you pass `--force`.
+
+Current `Slackware-Arrakis` profile hygiene:
+
+```sh
+~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis settings status
+```
+
+The selected world currently uses:
+
+```text
+~/.dune/worlds/sh-db3533a2d5a25fb-xyyxbx/UserSettings/
+```
+
+Managed drift should normally be `0 changed managed setting(s)`. If drift is
+intentional, `settings apply --force` or `settings apply-restart --force` can
+overwrite the deployed copy; otherwise use `settings pull` to make local match
+the live deployed settings before further edits.
+
+## dune-ctl Command Reference
+
+Use `--world Slackware-Arrakis` or `--world sh-db3533a2d5a25fb-xyyxbx` for
+explicit targeting. The TUI is the default when no subcommand is provided.
+Examples below use `dune-ctl`; replace that with
+`~/dune-server/dune-ctl/target/debug/dune-ctl` if it is not in `PATH`.
+
+```sh
+# World and health
+dune-ctl worlds list
+dune-ctl --world Slackware-Arrakis status
+dune-ctl --world Slackware-Arrakis diagnostics
+dune-ctl --world Slackware-Arrakis token-check
+
+# Primary Sietch lifecycle
+dune-ctl --world Slackware-Arrakis sietches list
+dune-ctl --world Slackware-Arrakis sietches start
+dune-ctl --world Slackware-Arrakis sietches stop
+dune-ctl --world Slackware-Arrakis sietches restart
+
+# Maps / travel surfaces
+dune-ctl --world Slackware-Arrakis maps list
+dune-ctl --world Slackware-Arrakis maps start DeepDesert_1
+dune-ctl --world Slackware-Arrakis maps stop DeepDesert_1
+
+# Settings
+dune-ctl --world Slackware-Arrakis settings list
+dune-ctl --world Slackware-Arrakis settings status
+dune-ctl --world Slackware-Arrakis settings pull
+dune-ctl --world Slackware-Arrakis settings set sietch_name "Arrakis-SlackwareLinux"
+dune-ctl --world Slackware-Arrakis settings apply
+dune-ctl --world Slackware-Arrakis settings apply-restart
+
+# Update/security helpers
+dune-ctl --world Slackware-Arrakis gateway-patch
+~/dune-server/scripts/update.sh --start-after
+~/dune-server/scripts/security-audit.sh
+~/dune-server/scripts/dune-backup.sh
+sudo ~/dune-server/scripts/resource-snapshot.sh known-good-YYYYMMDD-resources
+```
 
 LAN clients behind the Frontier router need an OUTPUT DNAT rule because the
 router does not provide NAT hairpin:

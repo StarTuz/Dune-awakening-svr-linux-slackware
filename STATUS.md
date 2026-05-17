@@ -274,7 +274,11 @@ firewall-cmd --reload
 - [ ] Off-server backup strategy (rsync to NAS / rclone to cloud — TBD)
 - [ ] Create `settings.conf` (`printf '\n\n\n47.145.51.160\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
 - [ ] **Rotate FLS token before 2027-04-08** (expires 2027-05-08) — update BattleGroup CR args (28 occurrences) + re-apply gateway patch
-- [ ] Continue dune-ctl polishing — multi-world foundation exists; web UI and multi-Sietch research remain future work
+- [x] dune-ctl operational polish — world targeting, primary Sietch lifecycle,
+  settings drift guard, per-world settings profile, and TUI settings polish are
+  in place
+- [ ] Future dune-ctl work — web UI, combined preflight command, and
+  multi-Sietch research remain optional/future work
 
 ## Bootstrapping fixes applied (fresh cluster workarounds)
 

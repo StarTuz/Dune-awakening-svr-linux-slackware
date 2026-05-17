@@ -12,6 +12,7 @@ Common paths for the native Slackware Dune: Awakening deployment.
 | Windows package reference | `/home/dune/steamcmd/dune_server` |
 | SteamCMD | `/home/dune/steamcmd/steamcmd.sh` |
 | Rust control tool | `/home/dune/dune-server/dune-ctl` |
+| Debug `dune-ctl` binary | `/home/dune/dune-server/dune-ctl/target/debug/dune-ctl` |
 | TUI mascot design note | `/home/dune/dune-server/dune-ctl/TUI-MASCOT.md` |
 
 ## Main Documentation
@@ -68,10 +69,22 @@ Common paths for the native Slackware Dune: Awakening deployment.
 | World config YAML | `/home/dune/.dune/sh-db3533a2d5a25fb-xyyxbx.yaml` |
 | FLS secret YAML | `/home/dune/.dune/sh-db3533a2d5a25fb-xyyxbx-fls-secret.yaml` |
 | RMQ secret YAML | `/home/dune/.dune/sh-db3533a2d5a25fb-xyyxbx-rmq-secret.yaml` |
+| Per-world settings root | `/home/dune/.dune/worlds` |
+| Slackware-Arrakis settings profile | `/home/dune/.dune/worlds/sh-db3533a2d5a25fb-xyyxbx/UserSettings` |
+| Slackware-Arrakis UserEngine.ini | `/home/dune/.dune/worlds/sh-db3533a2d5a25fb-xyyxbx/UserSettings/UserEngine.ini` |
+| Slackware-Arrakis UserGame.ini | `/home/dune/.dune/worlds/sh-db3533a2d5a25fb-xyyxbx/UserSettings/UserGame.ini` |
 | Optional Windows-style settings file | `/home/dune/.dune/settings.conf` |
 
 The YAML files under `/home/dune/.dune` contain secrets and should remain mode
 `600`.
+
+The per-world `UserSettings` profile is the active local source for
+`dune-ctl --world Slackware-Arrakis settings ...`. It was initialized from the
+deployed `/srv/UserSettings` copy and should normally report clean drift via:
+
+```sh
+~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis settings status
+```
 
 ## Kubernetes and k3s
 
