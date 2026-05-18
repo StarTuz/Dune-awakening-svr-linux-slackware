@@ -5,12 +5,13 @@ use crate::{config::Config, kubectl};
 
 pub async fn resolve_pod(cfg: &Config, target: &str) -> Result<String> {
     let search = match target.to_ascii_lowercase().as_str() {
-        "gateway" => "gateway",
-        "director" => "director",
+        "gateway" => "sgw-deploy",
+        "director" => "bgd-deploy",
         "postgres" | "db" => "db-dbdepl-sts",
-        "rabbitmq" | "rmq" => "rabbitmq",
-        "filebrowser" => "filebrowser",
-        "text-router" | "textrouter" => "text-router",
+        "rabbitmq" | "rmq" | "mq" => "mq-game-sts",
+        "rabbitmq-admin" | "mq-admin" => "mq-admin-sts",
+        "filebrowser" | "fb" => "fb-deploy",
+        "text-router" | "textrouter" | "tr" => "tr-deploy",
         _ => {
             // Map name (e.g. "Survival_1") → slug ("survival-1") → pod substring search
             let slug = target.to_ascii_lowercase().replace('_', "-");
