@@ -33,6 +33,10 @@ pub enum ValueKind {
     Float,
     Integer,
     QuotedString,
+    /// Plain string, no surrounding quotes (e.g. Password_Admin=mypass)
+    StringRaw,
+    /// UE5 array-append format: +Key=Value per line, stored as newline-joined string
+    StringList,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -268,6 +272,24 @@ pub const CATALOG: &[SettingDef] = &[
         kind: ValueKind::Integer,
         secret: false,
     },
+    SettingDef {
+        key: "admin_password",
+        label: "In-game admin password (AdminLogin command)",
+        file: SettingsFile::Game,
+        section: "AdminSetting.Global",
+        ini_key: "Password_Admin",
+        kind: ValueKind::StringRaw,
+        secret: true,
+    },
+    SettingDef {
+        key: "allowed_gm_commands",
+        label: "Whitelisted GM commands (one per line)",
+        file: SettingsFile::Game,
+        section: "AdminSetting.Global",
+        ini_key: "Allowed_GM_Commands",
+        kind: ValueKind::StringList,
+        secret: false,
+    },
 ];
 
 // Settings observed in Nitrado's web panel whose INI keys are not confirmed in
@@ -310,7 +332,8 @@ pub fn kind_label(kind: ValueKind) -> &'static str {
         ValueKind::BoolInt | ValueKind::BoolLower | ValueKind::BoolTitle => "bool",
         ValueKind::Float => "float",
         ValueKind::Integer => "int",
-        ValueKind::QuotedString => "string",
+        ValueKind::QuotedString | ValueKind::StringRaw => "string",
+        ValueKind::StringList => "list",
     }
 }
 
@@ -322,7 +345,7 @@ pub async fn list(cfg: &Config) -> Result<Vec<SettingValue>> {
             .with_context(|| format!("failed to read {}", def.file.filename()))?;
         out.push(SettingValue {
             def: *def,
-            value: get_value(&text, def.section, def.ini_key),
+            value: read_value(&text, def),
         });
     }
     Ok(out)
@@ -335,8 +358,13 @@ pub async fn set(cfg: &Config, key: &str, value: &str) -> Result<()> {
     let text = tokio::fs::read_to_string(&path)
         .await
         .with_context(|| format!("failed to read {}", path.display()))?;
-    let updated = set_value(&text, def.section, def.ini_key, &value)
-        .with_context(|| format!("failed to update {} in {}", def.ini_key, path.display()))?;
+    let updated = if def.kind == ValueKind::StringList {
+        let items: Vec<&str> = value.lines().filter(|l| !l.trim().is_empty()).collect();
+        set_value_list(&text, def.section, def.ini_key, &items)
+    } else {
+        set_value(&text, def.section, def.ini_key, &value)
+    }
+    .with_context(|| format!("failed to update {} in {}", def.ini_key, path.display()))?;
     tokio::fs::write(&path, updated)
         .await
         .with_context(|| format!("failed to write {}", path.display()))?;
@@ -435,9 +463,9 @@ pub async fn diff(cfg: &Config) -> Result<String> {
         } else {
             let mut changed = 0;
             for def in CATALOG.iter().filter(|def| def.file == file) {
-                let local_value = get_value(&local, def.section, def.ini_key)
+                let local_value = read_value(&local, def)
                     .unwrap_or_else(|| "<missing>".to_string());
-                let remote_value = get_value(&remote, def.section, def.ini_key)
+                let remote_value = read_value(&remote, def)
                     .unwrap_or_else(|| "<missing>".to_string());
                 if local_value != remote_value {
                     changed += 1;
@@ -488,10 +516,10 @@ pub async fn drift(cfg: &Config) -> Result<SettingsDrift> {
         for def in CATALOG.iter().copied().filter(|def| def.file == file) {
             items.push(SettingDrift {
                 def,
-                local: get_value(&local, def.section, def.ini_key),
+                local: read_value(&local, &def),
                 deployed: deployed
                     .as_deref()
-                    .and_then(|text| get_value(text, def.section, def.ini_key)),
+                    .and_then(|text| read_value(text, &def)),
             });
         }
     }
@@ -501,6 +529,21 @@ pub async fn drift(cfg: &Config) -> Result<SettingsDrift> {
         deployed_available,
         error,
     })
+}
+
+/// Read a single setting value from an INI text string, dispatching on kind.
+/// Returns None if the key is absent. For StringList, joins all entries with '\n'.
+pub fn read_value(text: &str, def: &SettingDef) -> Option<String> {
+    if def.kind == ValueKind::StringList {
+        let items = get_value_list(text, def.section, def.ini_key);
+        if items.is_empty() {
+            None
+        } else {
+            Some(items.join("\n"))
+        }
+    } else {
+        get_value(text, def.section, def.ini_key)
+    }
 }
 
 pub fn setting_path(cfg: &Config, file: SettingsFile) -> PathBuf {
@@ -530,22 +573,28 @@ pub fn display_def_value(def: &SettingDef, value: Option<&str>) -> String {
     let Some(value) = value else {
         return "—".to_string();
     };
-    if !def.secret {
-        if def.kind == ValueKind::QuotedString {
+    if def.secret {
+        let unquoted = unquote_display(value);
+        return if unquoted.is_empty() {
+            "none".to_string()
+        } else {
+            "********".to_string()
+        };
+    }
+    match def.kind {
+        ValueKind::QuotedString => {
             let unquoted = unquote_display(value);
-            return if unquoted.is_empty() {
+            if unquoted.is_empty() {
                 "—".to_string()
             } else {
                 unquoted.to_string()
-            };
+            }
         }
-        return value.to_string();
-    }
-    let unquoted = unquote_display(value);
-    if unquoted.is_empty() {
-        "none".to_string()
-    } else {
-        "********".to_string()
+        ValueKind::StringList => {
+            let count = value.lines().filter(|l| !l.trim().is_empty()).count();
+            format!("{} command{}", count, if count == 1 { "" } else { "s" })
+        }
+        _ => value.to_string(),
     }
 }
 
@@ -600,6 +649,8 @@ fn normalize_value(kind: ValueKind, value: &str) -> Result<String> {
             Ok(value.to_string())
         }
         ValueKind::QuotedString => quote_string_value(value),
+        ValueKind::StringRaw => Ok(value.trim().to_string()),
+        ValueKind::StringList => Ok(value.to_string()),
     }
 }
 
@@ -681,6 +732,70 @@ fn set_value(text: &str, section: &str, key: &str, value: &str) -> Option<String
         out.push(format!("{}={}", key, value));
     } else if in_section && !replaced {
         out.push(format!("{}={}", key, value));
+    }
+
+    Some(format!("{}\n", out.join("\n")))
+}
+
+fn get_value_list(text: &str, section: &str, key: &str) -> Vec<String> {
+    let mut in_section = false;
+    let mut values = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if section_header(trimmed).is_some() {
+            in_section = section_header(trimmed) == Some(section);
+            continue;
+        }
+        if in_section {
+            let Some((line_key, value)) = active_assignment(trimmed) else {
+                continue;
+            };
+            if line_key.trim_start_matches('+') == key {
+                values.push(value.trim().to_string());
+            }
+        }
+    }
+    values
+}
+
+fn set_value_list(text: &str, section: &str, key: &str, items: &[&str]) -> Option<String> {
+    let mut out = Vec::new();
+    let mut in_section = false;
+    let mut found_section = false;
+    let plus_key = format!("+{}", key);
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(name) = section_header(trimmed) {
+            if in_section {
+                for item in items {
+                    out.push(format!("{}={}", plus_key, item));
+                }
+            }
+            in_section = name == section;
+            found_section |= in_section;
+            out.push(line.to_string());
+            continue;
+        }
+        if in_section {
+            if let Some((line_key, _)) = active_assignment(trimmed) {
+                if line_key.trim_start_matches('+') == key {
+                    continue;
+                }
+            }
+        }
+        out.push(line.to_string());
+    }
+
+    if !found_section {
+        out.push(format!("[{}]", section));
+        for item in items {
+            out.push(format!("{}={}", plus_key, item));
+        }
+    } else if in_section {
+        for item in items {
+            out.push(format!("{}={}", plus_key, item));
+        }
     }
 
     Some(format!("{}\n", out.join("\n")))
