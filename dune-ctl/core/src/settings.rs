@@ -250,7 +250,52 @@ pub const CATALOG: &[SettingDef] = &[
         kind: ValueKind::BoolTitle,
         secret: false,
     },
+    SettingDef {
+        key: "blueprint_max_extensions",
+        label: "Blueprint foundation levels (solido replicator)",
+        file: SettingsFile::Game,
+        section: "/Script/DuneSandbox.BuildingSettings",
+        ini_key: "m_BuildingBlueprintMaxExtensions",
+        kind: ValueKind::Integer,
+        secret: false,
+    },
+    SettingDef {
+        key: "base_backup_max_extensions",
+        label: "Base backup restore foundation levels",
+        file: SettingsFile::Game,
+        section: "/Script/DuneSandbox.BuildingSettings",
+        ini_key: "m_BaseBackupMaxExtensions",
+        kind: ValueKind::Integer,
+        secret: false,
+    },
 ];
+
+// Settings observed in Nitrado's web panel whose INI keys are not confirmed in
+// the shipped UserEngine.ini / UserGame.ini templates. INI keys need to be
+// verified by inspecting a live server's config before adding to CATALOG.
+//
+// ConsoleVariables (UserEngine.ini) — likely Bgd.* namespace:
+//   PlayerMOTD                             login message of the day
+//
+// ConsoleVariables — sandstorm damage (advanced sandstorm group):
+//   SandStormAdvancedSettingDamageToPlayer     default 5
+//   SandStormAdvancedSettingDamageToVehicle    default 5
+//   SandStormAdvancedSettingDamageToBuilding   default 5
+//   SandStormAdvancedSettingDamageToPlaceable  default 5
+//
+// ConsoleVariables — sandworm threat attraction (all int, per-sec or per-unit):
+//   WalkingThreatPerSec          15    RunningThreatPerSec         20
+//   SprintingThreatPerSec        20    CrouchingThreatPerSec       15
+//   DashingThreatPerSec          90    HyperSprintingThreatPerSec  90
+//   SuspendingThreatPerSec       200   ShieldingThreatPerSec       500
+//   DrumsandThreatPerSec         200
+//   HarvestSpiceCoalesceThreatUnit    10   HarvestSpicePickupThreatUnit    10
+//   HarvestFlourSandCoalesceThreatUnit 10  HarvestFlourSandPickupThreatUnit 10
+//
+// BuildingSettings (UserGame.ini) — confirmed section, key unconfirmed:
+//   BaseBackupToolTimeRestrictionInSeconds  default 604800 (7 days)
+//   StakingUnitExtensionDefaultTimes        default unset
+//   StakingUnitVerticalExtensionDefaultTimes default unset
 
 pub fn catalog() -> &'static [SettingDef] {
     CATALOG
