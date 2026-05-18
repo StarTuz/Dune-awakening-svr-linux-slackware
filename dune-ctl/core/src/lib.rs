@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod battlegroup;
 pub mod config;
 pub mod diagnostics;

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Subcommand;
 use dune_ctl_core::{
-    battlegroup,
+    backup, battlegroup,
     config::{Config, WorldProfile},
     diagnostics::CheckState,
     fls::FlsTokenState,
@@ -53,6 +53,11 @@ pub enum Command {
     GatewayPatch,
     /// Check FLS token expiry; exits non-zero if critical or expired
     TokenCheck,
+    /// Create or restore database backups
+    Backup {
+        #[command(subcommand)]
+        action: BackupCommand,
+    },
     /// Stream or show logs for a map or infrastructure pod
     Logs {
         /// Map name (e.g. Survival_1) or infra alias: gateway, director, postgres,
@@ -118,6 +123,29 @@ pub enum BattlegroupCommand {
 }
 
 #[derive(Subcommand)]
+pub enum BackupCommand {
+    /// List available backup bundles for the current battlegroup
+    List,
+    /// Create a full backup bundle (DB dump + k8s metadata + settings)
+    Run {
+        /// Skip the database dump; capture metadata and settings only
+        #[arg(long)]
+        skip_db: bool,
+        /// Database backup filename (default: <bg>-<timestamp>.backup)
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Restore from a backup bundle (requires --yes)
+    Restore {
+        /// Bundle timestamp (e.g. 20260517-142305) or full path
+        bundle: String,
+        /// Confirm the restore without interactive prompt
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum SettingsCommand {
     /// List managed settings and current local values
     List,
@@ -150,6 +178,7 @@ pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
         Command::Update => cmd_update(cfg).await,
         Command::GatewayPatch => cmd_gateway_patch(cfg).await,
         Command::TokenCheck => cmd_token_check(cfg).await,
+        Command::Backup { action } => cmd_backup(action, cfg).await,
         Command::Logs {
             target,
             follow,
@@ -752,6 +781,51 @@ async fn cmd_token_check(cfg: &Config) -> Result<()> {
         FlsTokenState::Expired => {
             eprintln!("CRITICAL: FLS token is EXPIRED — server browser will not show this server.");
             std::process::exit(2);
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_backup(action: BackupCommand, cfg: &Config) -> Result<()> {
+    match action {
+        BackupCommand::List => {
+            let entries = backup::list(cfg).await?;
+            if entries.is_empty() {
+                println!("No backups found in /srv/backups/dune/{}.", cfg.battlegroup);
+                return Ok(());
+            }
+            println!("{:<20} {:<5} Path", "Timestamp", "DB");
+            println!("{}", "-".repeat(72));
+            for e in &entries {
+                println!(
+                    "{:<20} {:<5} {}",
+                    e.timestamp,
+                    if e.has_db { "yes" } else { "no" },
+                    e.path.display()
+                );
+            }
+        }
+        BackupCommand::Run { skip_db, name } => {
+            println!("Starting backup for {}...", cfg.battlegroup);
+            backup::run(cfg, skip_db, name.as_deref()).await?;
+        }
+        BackupCommand::Restore { bundle, yes } => {
+            if !yes {
+                eprintln!(
+                    "ERROR: This will OVERWRITE the live database for {}.\n\
+                     The battlegroup should be stopped first.\n\
+                     Re-run with --yes to confirm.",
+                    cfg.battlegroup
+                );
+                std::process::exit(1);
+            }
+            println!(
+                "Restoring bundle '{}' for {}...",
+                bundle, cfg.battlegroup
+            );
+            backup::restore(cfg, &bundle).await?;
+            println!("Restore complete.");
+            print_target_summary(cfg);
         }
     }
     Ok(())
