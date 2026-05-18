@@ -276,6 +276,10 @@ pub const CATALOG: &[SettingDef] = &[
 //
 // ConsoleVariables (UserEngine.ini) — likely Bgd.* namespace:
 //   PlayerMOTD                             login message of the day
+//                                          Note: Nitrado likely delivers this via UE5's
+//                                          AGameSession MOTD mechanism (runtime console exec
+//                                          on player connect), not an INI key. May not exist
+//                                          as a settable config value at all.
 //
 // ConsoleVariables — sandstorm damage (advanced sandstorm group):
 //   SandStormAdvancedSettingDamageToPlayer     default 5
