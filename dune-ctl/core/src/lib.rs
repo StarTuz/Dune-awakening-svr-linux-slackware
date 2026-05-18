@@ -5,6 +5,7 @@ pub mod fls;
 pub mod gateway;
 pub mod health;
 pub mod kubectl;
+pub mod logs;
 pub mod maps;
 pub mod settings;
 pub mod sietches;

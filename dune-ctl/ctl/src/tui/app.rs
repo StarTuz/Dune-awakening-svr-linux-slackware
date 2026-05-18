@@ -7,7 +7,7 @@ use dune_ctl_core::{
     config::{Config, WorldProfile},
     gateway,
     health::HealthSnapshot,
-    maps, settings, sietches,
+    logs, maps, settings, sietches,
 };
 use ratatui::{backend::Backend, Terminal};
 use tokio::task::JoinHandle;
@@ -17,6 +17,7 @@ use super::ui;
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const EVENT_TIMEOUT: Duration = Duration::from_millis(200);
 type RefreshResult = Result<(HealthSnapshot, Vec<settings::SettingValue>)>;
+type LogsResult = Result<Vec<String>>;
 
 pub struct App {
     pub cfg: Config,
@@ -25,7 +26,10 @@ pub struct App {
     pub settings: Vec<settings::SettingValue>,
     pub worlds: Vec<WorldProfile>,
     pub refresh_task: Option<JoinHandle<RefreshResult>>,
+    pub logs_task: Option<JoinHandle<LogsResult>>,
     pub log: VecDeque<String>,
+    pub log_lines: Vec<String>,
+    pub logs_selected: usize,
     pub view: View,
     pub selected: usize,
     pub settings_selected: usize,
@@ -41,6 +45,7 @@ pub enum View {
     Dashboard,
     Maps,
     Settings,
+    Logs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,7 +121,10 @@ impl App {
             settings: Vec::new(),
             worlds,
             refresh_task: None,
+            logs_task: None,
             log: VecDeque::with_capacity(64),
+            log_lines: Vec::new(),
+            logs_selected: 0,
             view: View::Dashboard,
             selected: 0,
             settings_selected: 0,
@@ -153,6 +161,27 @@ impl App {
     }
 }
 
+/// Returns the ordered list of log targets for the Logs view left pane.
+/// Infra services always listed first, then running maps from the snapshot.
+pub fn build_log_targets(app: &App) -> Vec<String> {
+    let mut targets: Vec<String> = vec![
+        "gateway".into(),
+        "director".into(),
+        "postgres".into(),
+        "rabbitmq".into(),
+        "filebrowser".into(),
+        "text-router".into(),
+    ];
+    if let Some(snap) = &app.snapshot {
+        for map in &snap.maps {
+            if map.replicas > 0 {
+                targets.push(map.name.clone());
+            }
+        }
+    }
+    targets
+}
+
 pub async fn run_loop<B: Backend>(terminal: &mut Terminal<B>, cfg: &Config) -> Result<()> {
     let mut app = App::new(cfg.clone());
     app.push_log("dune-ctl started");
@@ -162,6 +191,7 @@ pub async fn run_loop<B: Backend>(terminal: &mut Terminal<B>, cfg: &Config) -> R
 
     while app.running {
         finish_refresh(&mut app).await;
+        finish_logs_task(&mut app).await;
         terminal.draw(|f| ui::draw(f, &app))?;
 
         if event::poll(EVENT_TIMEOUT)? {
@@ -172,6 +202,9 @@ pub async fn run_loop<B: Backend>(terminal: &mut Terminal<B>, cfg: &Config) -> R
 
         if last_poll.elapsed() >= POLL_INTERVAL {
             start_refresh(&mut app);
+            if app.view == View::Logs {
+                start_logs_refresh(&mut app);
+            }
             last_poll = Instant::now();
         }
     }
@@ -216,6 +249,11 @@ async fn finish_refresh(app: &mut App) {
             }
             app.settings = settings;
             app.snapshot = Some(snap);
+            // Clamp logs_selected after snapshot update (target list may have changed)
+            let log_count = build_log_targets(app).len();
+            if log_count > 0 && app.logs_selected >= log_count {
+                app.logs_selected = log_count - 1;
+            }
             app.loading = false;
         }
         Ok(Err(e)) => {
@@ -226,6 +264,40 @@ async fn finish_refresh(app: &mut App) {
             app.push_log(format!("refresh task error: {}", e));
             app.loading = false;
         }
+    }
+}
+
+fn start_logs_refresh(app: &mut App) {
+    if app.logs_task.is_some() {
+        return;
+    }
+    let targets = build_log_targets(app);
+    let target = match targets.get(app.logs_selected) {
+        Some(t) => t.clone(),
+        None => return,
+    };
+    let cfg = app.cfg.clone();
+    app.logs_task = Some(tokio::spawn(async move {
+        logs::tail(&cfg, &target, 150).await
+    }));
+}
+
+async fn finish_logs_task(app: &mut App) {
+    if !app
+        .logs_task
+        .as_ref()
+        .map(|t| t.is_finished())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let Some(task) = app.logs_task.take() else {
+        return;
+    };
+    match task.await {
+        Ok(Ok(lines)) => app.log_lines = lines,
+        Ok(Err(e)) => app.log_lines = vec![format!("error: {:#}", e)],
+        Err(e) => app.log_lines = vec![format!("task error: {}", e)],
     }
 }
 
@@ -248,6 +320,7 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     }
 
     let map_count = app.snapshot.as_ref().map(|s| s.maps.len()).unwrap_or(0);
+    let log_target_count = build_log_targets(app).len();
     match code {
         KeyCode::Char('q') | KeyCode::Esc => {
             app.running = false;
@@ -260,8 +333,12 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 View::Worlds => View::Dashboard,
                 View::Dashboard => View::Maps,
                 View::Maps => View::Settings,
-                View::Settings => View::Worlds,
+                View::Settings => View::Logs,
+                View::Logs => View::Worlds,
             };
+            if app.view == View::Logs {
+                start_logs_refresh(app);
+            }
         }
         KeyCode::Char('1') => {
             app.view = View::Worlds;
@@ -274,6 +351,10 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         }
         KeyCode::Char('4') => {
             app.view = View::Settings;
+        }
+        KeyCode::Char('5') => {
+            app.view = View::Logs;
+            start_logs_refresh(app);
         }
         KeyCode::Char('A') => {
             app.pending = Some(PendingAction::StartSietch);
@@ -299,6 +380,11 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
             app.pending = Some(PendingAction::InitWorldSettings);
         }
         KeyCode::Down | KeyCode::Char('j') => match app.view {
+            View::Logs if log_target_count > 0 => {
+                app.logs_selected = (app.logs_selected + 1) % log_target_count;
+                app.logs_task = None;
+                start_logs_refresh(app);
+            }
             View::Settings if !app.settings.is_empty() => {
                 app.settings_selected = (app.settings_selected + 1) % app.settings.len();
             }
@@ -309,6 +395,11 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
             _ => {}
         },
         KeyCode::Up | KeyCode::Char('k') => match app.view {
+            View::Logs if log_target_count > 0 && app.logs_selected > 0 => {
+                app.logs_selected -= 1;
+                app.logs_task = None;
+                start_logs_refresh(app);
+            }
             View::Settings if !app.settings.is_empty() && app.settings_selected > 0 => {
                 app.settings_selected -= 1;
             }
@@ -386,6 +477,10 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('r') => {
             app.push_log("refreshing...");
             start_refresh(app);
+            if app.view == View::Logs {
+                app.logs_task = None;
+                start_logs_refresh(app);
+            }
         }
         _ => {}
     }

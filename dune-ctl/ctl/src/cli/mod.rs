@@ -7,7 +7,7 @@ use dune_ctl_core::{
     fls::FlsTokenState,
     gateway,
     health::HealthSnapshot,
-    maps, settings, sietches, update,
+    logs, maps, settings, sietches, update,
 };
 
 #[derive(Subcommand)]
@@ -53,6 +53,18 @@ pub enum Command {
     GatewayPatch,
     /// Check FLS token expiry; exits non-zero if critical or expired
     TokenCheck,
+    /// Stream or show logs for a map or infrastructure pod
+    Logs {
+        /// Map name (e.g. Survival_1) or infra alias: gateway, director, postgres,
+        /// rabbitmq, filebrowser, text-router
+        target: String,
+        /// Follow log output (stream until Ctrl-C)
+        #[arg(short, long)]
+        follow: bool,
+        /// Number of recent lines to show (default 100)
+        #[arg(long, default_value = "100")]
+        tail: usize,
+    },
     /// Start the web interface (requires --features web)
     Web {
         #[arg(long, default_value = "9090")]
@@ -138,6 +150,11 @@ pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
         Command::Update => cmd_update(cfg).await,
         Command::GatewayPatch => cmd_gateway_patch(cfg).await,
         Command::TokenCheck => cmd_token_check(cfg).await,
+        Command::Logs {
+            target,
+            follow,
+            tail,
+        } => cmd_logs(cfg, &target, follow, tail).await,
         Command::Web { port } => cmd_web(port, cfg).await,
     }
 }
@@ -738,6 +755,21 @@ async fn cmd_token_check(cfg: &Config) -> Result<()> {
         }
     }
     Ok(())
+}
+
+async fn cmd_logs(cfg: &Config, target: &str, follow: bool, tail: usize) -> Result<()> {
+    println!("Resolving target '{}'...", target);
+    let pod = logs::resolve_pod(cfg, target).await?;
+    println!("Pod: {}", pod);
+    if follow {
+        logs::stream(cfg, target, tail).await
+    } else {
+        let lines = logs::tail(cfg, target, tail).await?;
+        for line in lines {
+            println!("{}", line);
+        }
+        Ok(())
+    }
 }
 
 async fn cmd_web(_port: u16, _cfg: &Config) -> Result<()> {

@@ -15,7 +15,7 @@ use ratatui::{
     Frame,
 };
 
-use super::app::{App, View};
+use super::app::{build_log_targets, App, View};
 
 pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
@@ -36,6 +36,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         View::Dashboard => draw_dashboard(f, app, chunks[2]),
         View::Maps => draw_maps_view(f, app, chunks[2]),
         View::Settings => draw_settings_view(f, app, chunks[2]),
+        View::Logs => draw_logs_view(f, app, chunks[2]),
     }
     draw_log(f, app, chunks[3]);
     draw_hints(f, app, chunks[4]);
@@ -169,8 +170,9 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         View::Dashboard => 1,
         View::Maps => 2,
         View::Settings => 3,
+        View::Logs => 4,
     };
-    let titles = ["1 Worlds", "2 Dashboard", "3 Maps", "4 Settings"];
+    let titles = ["1 Worlds", "2 Dashboard", "3 Maps", "4 Settings", "5 Logs"];
     f.render_widget(
         Tabs::new(titles)
             .select(selected)
@@ -718,11 +720,80 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
         }
         View::Maps => "[Tab/4] settings  [s/x] map start/stop  [r] refresh  [q] quit",
         View::Settings => {
-            "[Tab/1] worlds  [N/P/C] name/pass  [e/t] edit/toggle  [U] pull  [a] apply  [D] deploy+restart  [q] quit"
+            "[Tab/5] logs  [N/P/C] name/pass  [e/t] edit/toggle  [U] pull  [a] apply  [D] deploy+restart  [q] quit"
         }
+        View::Logs => "[Tab/1] worlds  [↑/↓] select target  [r] refresh  [q] quit",
     };
     f.render_widget(
         Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
+        area,
+    );
+}
+
+fn draw_logs_view(f: &mut Frame, app: &App, area: Rect) {
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(20), Constraint::Min(10)])
+        .split(area);
+    draw_logs_target_list(f, app, columns[0]);
+    draw_logs_lines(f, app, columns[1]);
+}
+
+fn draw_logs_target_list(f: &mut Frame, app: &App, area: Rect) {
+    let targets = build_log_targets(app);
+    let rows: Vec<Row> = targets
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let style = if i == app.logs_selected {
+                Style::default().bg(Color::DarkGray)
+            } else {
+                Style::default()
+            };
+            Row::new(vec![Cell::from(name.as_str())]).style(style)
+        })
+        .collect();
+
+    let table = Table::new(rows, [Constraint::Min(18)])
+        .header(header_row(vec!["Target"]))
+        .block(Block::default().borders(Borders::ALL).title("Targets"));
+    f.render_widget(table, area);
+}
+
+fn draw_logs_lines(f: &mut Frame, app: &App, area: Rect) {
+    let targets = build_log_targets(app);
+    let target_name = targets
+        .get(app.logs_selected)
+        .map(String::as_str)
+        .unwrap_or("—");
+
+    let title = format!("Logs — {}", target_name);
+
+    let visible = (area.height as usize).saturating_sub(2);
+    let lines: Vec<Line> = if app.log_lines.is_empty() {
+        if app.logs_task.is_some() {
+            vec![Line::from(Span::styled(
+                "Fetching logs...",
+                Style::default().fg(Color::DarkGray),
+            ))]
+        } else {
+            vec![Line::from(Span::styled(
+                "Select a target and press [r] to fetch logs.",
+                Style::default().fg(Color::DarkGray),
+            ))]
+        }
+    } else {
+        app.log_lines
+            .iter()
+            .rev()
+            .take(visible)
+            .rev()
+            .map(|l| Line::from(l.as_str()))
+            .collect()
+    };
+
+    f.render_widget(
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title)),
         area,
     );
 }
