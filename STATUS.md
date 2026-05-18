@@ -308,6 +308,7 @@ Both `scripts/map-toggle.sh` and `dune-ctl/core/src/maps.rs` were updated so `st
 - [ ] Off-server backup strategy (rsync to NAS / rclone to cloud — TBD)
 - [ ] Create `settings.conf` (`printf '\n\n\n47.145.51.160\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
 - [ ] **Rotate FLS token before 2027-04-08** (expires 2027-05-08) — update BattleGroup CR args (28 occurrences) + re-apply gateway patch
+- [ ] **Set sietch password before official launch** — no password is set (fine for PTC; FLS browser not widely used yet). At official release the server is publicly visible to all players. Set with `dune-ctl settings set sietch_password <password> && dune-ctl settings apply` before going live on the official world.
 - [x] dune-ctl operational polish — world targeting, primary Sietch lifecycle,
   settings drift guard, per-world settings profile, and TUI settings polish are
   in place

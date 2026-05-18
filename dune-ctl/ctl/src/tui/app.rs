@@ -16,18 +16,13 @@ use super::ui;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const EVENT_TIMEOUT: Duration = Duration::from_millis(200);
-type RefreshResult = Result<(
-    HealthSnapshot,
-    Vec<settings::SettingValue>,
-    Option<settings::SettingsDrift>,
-)>;
+type RefreshResult = Result<(HealthSnapshot, Vec<settings::SettingValue>)>;
 
 pub struct App {
     pub cfg: Config,
     pub started_at: Instant,
     pub snapshot: Option<HealthSnapshot>,
     pub settings: Vec<settings::SettingValue>,
-    pub settings_drift: Option<settings::SettingsDrift>,
     pub worlds: Vec<WorldProfile>,
     pub refresh_task: Option<JoinHandle<RefreshResult>>,
     pub log: VecDeque<String>,
@@ -93,10 +88,10 @@ impl PendingAction {
                 "Restarts the selected world's primary Sietch by restarting the BattleGroup. Gateway patch may need verification after rollout."
             }
             Self::ApplySettings => {
-                "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings. If drift is shown, this overwrites deployed values with local values."
+                "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings."
             }
             Self::ApplySettingsAndRestart => {
-                "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings, then restarts the primary Sietch. If drift is shown, this overwrites deployed values. Connected players will be disconnected."
+                "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings, then restarts the primary Sietch. Connected players will be disconnected."
             }
             Self::PullDeployedSettings => {
                 "Replaces local UserEngine.ini and UserGame.ini with the deployed copies from /srv/UserSettings. Live server state is not changed."
@@ -119,7 +114,6 @@ impl App {
             started_at: Instant::now(),
             snapshot: None,
             settings: Vec::new(),
-            settings_drift: None,
             worlds,
             refresh_task: None,
             log: VecDeque::with_capacity(64),
@@ -193,8 +187,7 @@ fn start_refresh(app: &mut App) {
     app.refresh_task = Some(tokio::spawn(async move {
         let snap = HealthSnapshot::collect(&cfg).await?;
         let settings = settings::list(&cfg).await.unwrap_or_default();
-        let drift = settings::drift(&cfg).await.ok();
-        Ok((snap, settings, drift))
+        Ok((snap, settings))
     }));
 }
 
@@ -213,7 +206,7 @@ async fn finish_refresh(app: &mut App) {
     };
 
     match task.await {
-        Ok(Ok((snap, settings, drift))) => {
+        Ok(Ok((snap, settings))) => {
             let map_len = snap.maps.len();
             if app.selected >= map_len {
                 app.selected = map_len.saturating_sub(1);
@@ -222,7 +215,6 @@ async fn finish_refresh(app: &mut App) {
                 app.settings_selected = settings.len().saturating_sub(1);
             }
             app.settings = settings;
-            app.settings_drift = drift;
             app.snapshot = Some(snap);
             app.loading = false;
         }

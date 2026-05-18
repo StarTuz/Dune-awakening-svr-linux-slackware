@@ -87,7 +87,6 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         ),
         fls_span,
         ram_span,
-        settings_drift_span(app),
     ]);
     let secondary = Line::from(vec![
         Span::styled("ns:", Style::default().fg(Color::DarkGray)),
@@ -148,24 +147,6 @@ fn sietch_title<'a>(app: &'a App, snap: Option<&'a HealthSnapshot>) -> Option<&'
         })
         .filter(|value| !value.is_empty())
         .or_else(|| snap.and_then(|s| s.battlegroup_title.as_deref()))
-}
-
-fn settings_drift_span(app: &App) -> Span<'static> {
-    let Some(report) = app.settings_drift.as_ref() else {
-        return Span::styled(" Settings:unknown ", Style::default().fg(Color::DarkGray));
-    };
-    if !report.deployed_available {
-        return Span::styled(" Settings:unavailable ", Style::default().fg(Color::Red));
-    }
-    let changed = report.changed_count();
-    if changed == 0 {
-        Span::styled(" Settings:clean ", Style::default().fg(Color::Green))
-    } else {
-        Span::styled(
-            format!(" Settings:{} changed ", changed),
-            Style::default().fg(Color::Yellow),
-        )
-    }
 }
 
 fn mascot_line(app: &App) -> &'static str {
@@ -759,7 +740,6 @@ fn draw_settings_table(f: &mut Frame, app: &App, area: Rect) {
     let header = Row::new(vec![
         Cell::from("  Key").style(header_style()),
         Cell::from("Value").style(header_style()),
-        Cell::from("Drift").style(header_style()),
         Cell::from("Type").style(header_style()),
     ]);
 
@@ -786,8 +766,6 @@ fn draw_settings_table(f: &mut Frame, app: &App, area: Rect) {
             Row::new(vec![
                 Cell::from(format!("{}{}", dot, item.def.key)),
                 Cell::from(compact_cell(&setting_display_value(app, item), 18)),
-                Cell::from(setting_drift_label(app, item.def.key))
-                    .style(Style::default().fg(setting_drift_color(app, item.def.key))),
                 Cell::from(settings::kind_label(item.def.kind)),
             ])
             .style(row_style)
@@ -799,15 +777,11 @@ fn draw_settings_table(f: &mut Frame, app: &App, area: Rect) {
         [
             Constraint::Min(24),
             Constraint::Length(18),
-            Constraint::Length(9),
             Constraint::Length(7),
         ],
     )
     .header(header)
-    .block(Block::default().borders(Borders::ALL).title(format!(
-        "Managed Settings  drift:{}",
-        settings_drift_summary(app)
-    )));
+    .block(Block::default().borders(Borders::ALL).title("Managed Settings"));
 
     let mut state = TableState::default();
     if !app.settings.is_empty() {
@@ -833,11 +807,6 @@ fn draw_settings_detail(f: &mut Frame, app: &App, area: Rect) {
         Line::from(item.def.label),
         Line::from(""),
         Line::from(format!("Value: {}", setting_display_value(app, item))),
-        Line::from(format!(
-            "Deployed: {}",
-            setting_deployed_display_value(app, item.def.key)
-        )),
-        Line::from(format!("Drift: {}", setting_drift_label(app, item.def.key))),
         Line::from(format!("Source: {}", app.cfg.user_settings_dir().display())),
         Line::from(format!("File: {}", item.def.file.filename())),
         Line::from(format!("Section: [{}]", item.def.section)),
@@ -880,58 +849,6 @@ fn compact_cell(value: &str, max_chars: usize) -> String {
     let mut out: String = value.chars().take(keep).collect();
     out.push_str("...");
     out
-}
-
-fn settings_drift_summary(app: &App) -> String {
-    let Some(report) = app.settings_drift.as_ref() else {
-        return "unknown".to_string();
-    };
-    if !report.deployed_available {
-        return "unavailable".to_string();
-    }
-    let changed = report.changed_count();
-    if changed == 0 {
-        "clean".to_string()
-    } else {
-        format!("{} changed", changed)
-    }
-}
-
-fn setting_drift_for<'a>(app: &'a App, key: &str) -> Option<&'a settings::SettingDrift> {
-    app.settings_drift
-        .as_ref()?
-        .items
-        .iter()
-        .find(|item| item.def.key == key)
-}
-
-fn setting_drift_label(app: &App, key: &str) -> &'static str {
-    let Some(report) = app.settings_drift.as_ref() else {
-        return "unknown";
-    };
-    if !report.deployed_available {
-        return "unavail";
-    }
-    match setting_drift_for(app, key) {
-        Some(item) if item.changed() => "changed",
-        Some(_) => "clean",
-        None => "unknown",
-    }
-}
-
-fn setting_drift_color(app: &App, key: &str) -> Color {
-    match setting_drift_label(app, key) {
-        "changed" => Color::Yellow,
-        "clean" => Color::Green,
-        "unavail" => Color::Red,
-        _ => Color::DarkGray,
-    }
-}
-
-fn setting_deployed_display_value(app: &App, key: &str) -> String {
-    setting_drift_for(app, key)
-        .map(settings::display_drift_deployed)
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn setting_display_value(app: &App, item: &settings::SettingValue) -> String {
