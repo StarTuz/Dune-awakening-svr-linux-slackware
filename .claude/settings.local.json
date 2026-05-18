@@ -97,7 +97,8 @@
       "Read(//etc/**)",
       "Bash(/home/dune/dune-server/dune-ctl/target/release/dune-ctl --version)",
       "Bash(./target/debug/dune-ctl maps *)",
-      "Bash(echo \"exit: $?\")"
+      "Bash(echo \"exit: $?\")",
+      "Bash(git *)"
     ]
   }
 }
