@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Subcommand;
 use dune_ctl_core::{
     backup, battlegroup,
@@ -136,6 +136,9 @@ pub enum BackupCommand {
         /// Database backup filename (default: <bg>-<timestamp>.backup)
         #[arg(long)]
         name: Option<String>,
+        /// Keep only the N most recent bundles after a successful run (0 = no pruning)
+        #[arg(long, default_value = "0")]
+        keep: usize,
     },
     /// Restore from a backup bundle (requires --yes)
     Restore {
@@ -144,6 +147,21 @@ pub enum BackupCommand {
         /// Confirm the restore without interactive prompt
         #[arg(long)]
         yes: bool,
+    },
+    /// Manage the automated nightly backup schedule
+    Schedule {
+        /// Print the installed schedule without modifying it
+        #[arg(long)]
+        show: bool,
+        /// Remove the scheduled backup job
+        #[arg(long)]
+        remove: bool,
+        /// Cron schedule expression (default: 3am daily)
+        #[arg(long, default_value = "0 3 * * *")]
+        cron: String,
+        /// Bundles to retain when the scheduled job runs
+        #[arg(long, default_value = "14")]
+        keep: usize,
     },
 }
 
@@ -809,9 +827,23 @@ async fn cmd_backup(action: BackupCommand, cfg: &Config) -> Result<()> {
                 );
             }
         }
-        BackupCommand::Run { skip_db, name } => {
+        BackupCommand::Run { skip_db, name, keep } => {
             println!("Starting backup for {}...", cfg.battlegroup);
             backup::run(cfg, skip_db, name.as_deref()).await?;
+            if keep > 0 {
+                let removed = backup::prune(cfg, keep).await?;
+                if removed.is_empty() {
+                    println!("Retention: {} bundles kept, nothing pruned.", keep);
+                } else {
+                    for path in &removed {
+                        println!("Pruned: {}", path.display());
+                    }
+                    println!("Retention: kept {} most recent bundles.", keep);
+                }
+            }
+        }
+        BackupCommand::Schedule { show, remove, cron, keep } => {
+            cmd_schedule(show, remove, &cron, keep, cfg)?;
         }
         BackupCommand::Restore { bundle, yes } => {
             if !yes {
@@ -865,6 +897,102 @@ async fn cmd_players(cfg: &Config) -> Result<()> {
                 p.last_login.as_deref().unwrap_or("—")
             );
         }
+    }
+    Ok(())
+}
+
+const CRON_MARKER: &str = "# dune-ctl-backup";
+
+fn cmd_schedule(show: bool, remove: bool, cron: &str, keep: usize, cfg: &Config) -> Result<()> {
+    let current = read_user_crontab()?;
+
+    if show {
+        match current.lines().find(|l| l.contains(CRON_MARKER)) {
+            Some(line) => println!("{}", line),
+            None => println!("No dune-ctl backup schedule installed."),
+        }
+        return Ok(());
+    }
+
+    // Strip any existing dune-ctl-backup line
+    let stripped: String = current
+        .lines()
+        .filter(|l| !l.contains(CRON_MARKER))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let stripped = stripped.trim_end().to_string();
+
+    if remove {
+        let new = if stripped.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n", stripped)
+        };
+        write_user_crontab(&new)?;
+        println!("dune-ctl backup schedule removed.");
+        return Ok(());
+    }
+
+    let bin = std::env::current_exe()
+        .unwrap_or_else(|_| std::path::PathBuf::from(
+            "/home/dune/dune-server/dune-ctl/target/release/dune-ctl",
+        ));
+    let entry = format!(
+        "{}  DUNE_CTL_WORLD={} {} backup run --keep {}  {}",
+        cron,
+        cfg.battlegroup,
+        bin.display(),
+        keep,
+        CRON_MARKER,
+    );
+
+    let new_crontab = if stripped.is_empty() {
+        format!("{}\n", entry)
+    } else {
+        format!("{}\n{}\n", stripped, entry)
+    };
+    write_user_crontab(&new_crontab)?;
+
+    println!("Backup schedule installed:");
+    println!("  Schedule : {}", cron);
+    println!("  Binary   : {}", bin.display());
+    println!("  World    : {}", cfg.battlegroup);
+    println!("  Keep     : {} most recent bundles", keep);
+    println!();
+    println!("Verify with: dune-ctl backup schedule --show");
+    Ok(())
+}
+
+fn read_user_crontab() -> Result<String> {
+    let out = std::process::Command::new("crontab")
+        .arg("-l")
+        .output()
+        .context("failed to run crontab -l")?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        // "no crontab for user" exits non-zero — treat as empty
+        Ok(String::new())
+    }
+}
+
+fn write_user_crontab(content: &str) -> Result<()> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = std::process::Command::new("crontab")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .spawn()
+        .context("failed to spawn crontab -")?;
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin piped")
+        .write_all(content.as_bytes())
+        .context("failed to write crontab")?;
+    let status = child.wait()?;
+    if !status.success() {
+        anyhow::bail!("crontab - exited with status {}", status);
     }
     Ok(())
 }

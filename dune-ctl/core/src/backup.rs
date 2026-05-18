@@ -100,6 +100,25 @@ pub async fn restore(cfg: &Config, bundle: &str) -> Result<()> {
     stream_command(cmd, &battlegroup_script.display().to_string()).await
 }
 
+/// Prune oldest bundles, keeping at most `keep` most recent.
+/// Returns removed paths. `keep == 0` is a no-op.
+pub async fn prune(cfg: &Config, keep: usize) -> Result<Vec<PathBuf>> {
+    if keep == 0 {
+        return Ok(Vec::new());
+    }
+    let entries = list(cfg).await?;
+    if entries.len() <= keep {
+        return Ok(Vec::new());
+    }
+    let to_remove: Vec<PathBuf> = entries[keep..].iter().map(|e| e.path.clone()).collect();
+    for path in &to_remove {
+        tokio::fs::remove_dir_all(path)
+            .await
+            .with_context(|| format!("failed to remove bundle {}", path.display()))?;
+    }
+    Ok(to_remove)
+}
+
 /// List backup bundles for the current battlegroup, newest first.
 pub async fn list(cfg: &Config) -> Result<Vec<BackupEntry>> {
     let bg_dir = PathBuf::from(BACKUP_ROOT).join(&cfg.battlegroup);
