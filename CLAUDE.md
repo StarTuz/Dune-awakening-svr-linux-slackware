@@ -195,26 +195,6 @@ After editing XML files, run `sudo firewall-cmd --reload` and verify the generat
 
 Run `~/dune-server/scripts/security-audit.sh` when you want a quick host-side exposure check. It flags accidental public exposure of Director, Filebrowser, Postgres, the k3s API, and RabbitMQ admin ports. It also treats the intentionally public `mq-game-svc` ports (`31982` and `30196`) as expected.
 
-### stale nft firewalld table failure mode
-
-Hagga Basin travel timed out on 2026-05-15 because a stale nftables `table inet firewalld` remained active while firewalld was configured for the iptables backend. The iptables firewalld rules correctly allowed Dune UDP `7782-7790`, but the stale nft firewalld input hook rejected client packets with `ICMP admin prohibited`.
-
-Diagnosis:
-
-```sh
-tcpdump -ni any 'host 192.168.254.17 and (udp port 7783 or icmp)'
-nft list tables
-```
-
-If `tcpdump` shows `ICMP ... admin prohibited` and `nft list tables` includes `table inet firewalld` while `FirewallBackend=iptables`, remove the stale nft table:
-
-```sh
-nft delete table inet firewalld
-firewall-cmd --reload
-```
-
-After the fix, `nft list tables` should not show `table inet firewalld`, and `tcpdump` should show two-way UDP between the client and the active Survival_1 port.
-
 ### SSH
 
 Key-only authentication. `/etc/ssh/sshd_config`:

@@ -441,7 +441,6 @@ async fn cmd_diagnostics(cfg: &Config) -> Result<()> {
     let snap = HealthSnapshot::collect(cfg).await?;
     println!("Diagnostics for {}", cfg.battlegroup);
     print_check("firewall backend", &snap.diagnostics.firewall_backend);
-    print_check("stale nft firewalld", &snap.diagnostics.stale_nft_firewalld);
     if let Some(gw) = &snap.gateway {
         println!(
             "{:<22} {}",
@@ -449,7 +448,6 @@ async fn cmd_diagnostics(cfg: &Config) -> Result<()> {
             if gw.patched { "ok" } else { "missing" }
         );
     }
-    println!("nft tables: {}", snap.diagnostics.nft_tables.join(", "));
     Ok(())
 }
 
@@ -534,21 +532,6 @@ async fn cmd_preflight(cfg: &Config, strict: bool) -> Result<()> {
             "firewall backend",
             &snap.diagnostics.firewall_backend.message,
         ),
-    });
-
-    rows.push(match snap.diagnostics.stale_nft_firewalld.state {
-        CheckState::Ok => {
-            PreflightRow::ok("stale nft", &snap.diagnostics.stale_nft_firewalld.message)
-        }
-        CheckState::Warning => {
-            PreflightRow::warn("stale nft", &snap.diagnostics.stale_nft_firewalld.message)
-        }
-        CheckState::Critical => {
-            PreflightRow::fail("stale nft", &snap.diagnostics.stale_nft_firewalld.message)
-        }
-        CheckState::Unknown => {
-            PreflightRow::warn("stale nft", &snap.diagnostics.stale_nft_firewalld.message)
-        }
     });
 
     rows.push(match &snap.gateway {

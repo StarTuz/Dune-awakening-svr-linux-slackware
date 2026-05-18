@@ -498,15 +498,6 @@ fn draw_diagnostics(f: &mut Frame, snap: Option<&HealthSnapshot>, area: Rect) {
 
     let lines = vec![
         check_line("firewalld", &snap.diagnostics.firewall_backend),
-        check_line("nft stale", &snap.diagnostics.stale_nft_firewalld),
-        Line::from(format!(
-            "nft tables: {}",
-            if snap.diagnostics.nft_tables.is_empty() {
-                "none/unknown".to_string()
-            } else {
-                snap.diagnostics.nft_tables.join(", ")
-            }
-        )),
     ];
     f.render_widget(panel("Diagnostics", lines), area);
 }

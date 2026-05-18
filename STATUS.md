@@ -190,7 +190,7 @@ All items applied. Details in CLAUDE.md § Security.
 | dune-ctl world targeting | ✅ `worlds list`, `--world`, and per-world settings profiles for PTC/official cutover |
 | dune-ctl primary Sietch lifecycle | ✅ `sietches list/start/stop/restart`; start/stop/restart currently map to selected BattleGroup lifecycle |
 | dune-ctl Sietch settings workflow | ✅ TUI shows name/password state and setting drift; `settings status` summarizes local-vs-deployed changes; `settings pull` syncs deployed User*.ini to local; `settings apply`/`apply-restart` require `--force` while drift exists |
-| dune-ctl preflight | ✅ `preflight` checks firewall backend, stale nft table, gateway patch, FLS token, primary Sietch, settings drift, and RAM; `--strict` fails on warnings |
+| dune-ctl preflight | ✅ `preflight` checks firewall backend, gateway patch, FLS token, primary Sietch, settings drift, and RAM; `--strict` fails on warnings |
 | Slackware-Arrakis settings profile | ✅ per-world profile initialized at `~/.dune/worlds/sh-db3533a2d5a25fb-xyyxbx/UserSettings`; deployed `User*.ini` pulled locally; managed drift clean |
 
 ## Future official launch cutover
@@ -300,7 +300,6 @@ Both `scripts/map-toggle.sh` and `dune-ctl/core/src/maps.rs` were updated so `st
 - [x] ~~Server browser visibility~~ — resolved 2026-05-14, "Slackware-Arrakis" visible in EXPERIMENTAL list
 - [x] ~~Security hardening~~ — resolved 2026-05-14; see above
 - [ ] Re-apply gateway patch after every restart: `~/dune-server/scripts/gateway-patch.sh`
-- [ ] If travel times out again, first check for stale nft firewalld state: `nft list tables` must not show `table inet firewalld`
 - [ ] Confirm motherboard swap outcome (64 GB recognised?) — reboot and verify with `free -h`
 - [ ] After board swap: raise Overmap request back to its natural limit (remove 200 Mi swap patch via `experimental_swap.sh`)
 - [x] Add and verify Dune backup/restore runbook and host backup wrapper — full DB backup succeeded 2026-05-15; see `BACKUP-RESTORE.md` and `scripts/dune-backup.sh`

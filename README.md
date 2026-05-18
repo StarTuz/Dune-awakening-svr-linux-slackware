@@ -35,20 +35,9 @@ system shape and control loops. `FILE-LOCATIONS.md` indexes important paths.
   or `ServerSetScale.replicas=1` without the matching
   `ServerSetScale.partitions`. Both can leave maps absent, stuck in startup, or
   using the wrong pod/partition index.
-- firewalld must use `FirewallBackend=iptables`. If travel packets are rejected
-  despite correct firewalld services, check for stale nft state:
-
-  ```sh
-  nft list tables
-  ```
-
-  There should be no `table inet firewalld`. If it appears while the backend is
-  iptables, remove the stale table and reload firewalld:
-
-  ```sh
-  nft delete table inet firewalld
-  firewall-cmd --reload
-  ```
+- firewalld must use `FirewallBackend=iptables` — the nftables backend
+  conflicts with k3s/flannel CNI. Verify with
+  `grep FirewallBackend /etc/firewalld/firewalld.conf`.
 
 - The current host is not memory-starved in the old sense, but it is swap-heavy
   by design. Use resource snapshots when you want a real picture of DD load
@@ -91,7 +80,6 @@ sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db353
 # Firewall sanity
 grep -n '^FirewallBackend' /etc/firewalld/firewalld.conf
 firewall-cmd --info-service=dune-game
-nft list tables
 ~/dune-server/scripts/security-audit.sh
 
 # Memory

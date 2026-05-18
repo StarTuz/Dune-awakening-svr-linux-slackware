@@ -89,21 +89,6 @@ effective public services with:
 The host cannot verify Frontier router forwarding directly; router forwards
 still need to be checked in the router UI.
 
-Known failure mode: a stale nftables `table inet firewalld` can remain active
-even while firewalld is using the iptables backend. In that state, iptables may
-allow Dune UDP while the stale nft input hook still rejects packets with
-`ICMP admin prohibited`.
-
-Check:
-
-```sh
-grep -n '^FirewallBackend' /etc/firewalld/firewalld.conf
-nft list tables
-```
-
-If `FirewallBackend=iptables`, `nft list tables` should not show
-`table inet firewalld`.
-
 ## k3s Base
 
 The deployment is a single-node k3s cluster. The node runs:
