@@ -78,6 +78,11 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         })
         .unwrap_or_else(|| Span::raw(" RAM:— "));
 
+    let players_span = snap
+        .and_then(|s| s.players_online)
+        .map(|n| Span::raw(format!(" Players:{} ", n)))
+        .unwrap_or_else(|| Span::raw(""));
+
     let primary = Line::from(vec![
         Span::styled(
             format!(
@@ -88,6 +93,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         ),
         fls_span,
         ram_span,
+        players_span,
     ]);
     let secondary = Line::from(vec![
         Span::styled("ns:", Style::default().fg(Color::DarkGray)),

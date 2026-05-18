@@ -8,6 +8,7 @@ pub mod health;
 pub mod kubectl;
 pub mod logs;
 pub mod maps;
+pub mod players;
 pub mod settings;
 pub mod sietches;
 pub mod update;

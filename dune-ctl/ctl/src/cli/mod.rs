@@ -7,7 +7,7 @@ use dune_ctl_core::{
     fls::FlsTokenState,
     gateway,
     health::HealthSnapshot,
-    logs, maps, settings, sietches, update,
+    logs, maps, players, settings, sietches, update,
 };
 
 #[derive(Subcommand)]
@@ -70,6 +70,8 @@ pub enum Command {
         #[arg(long, default_value = "100")]
         tail: usize,
     },
+    /// Show currently online players
+    Players,
     /// Start the web interface (requires --features web)
     Web {
         #[arg(long, default_value = "9090")]
@@ -184,6 +186,7 @@ pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
             follow,
             tail,
         } => cmd_logs(cfg, &target, follow, tail).await,
+        Command::Players => cmd_players(cfg).await,
         Command::Web { port } => cmd_web(port, cfg).await,
     }
 }
@@ -844,6 +847,25 @@ async fn cmd_logs(cfg: &Config, target: &str, follow: bool, tail: usize) -> Resu
         }
         Ok(())
     }
+}
+
+async fn cmd_players(cfg: &Config) -> Result<()> {
+    let online = players::list_online(cfg).await?;
+    if online.is_empty() {
+        println!("No players currently online.");
+    } else {
+        println!("{} player(s) online:", online.len());
+        println!("{:<32} Last login", "Name");
+        println!("{}", "-".repeat(56));
+        for p in &online {
+            println!(
+                "{:<32} {}",
+                p.display_name,
+                p.last_login.as_deref().unwrap_or("—")
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn cmd_web(_port: u16, _cfg: &Config) -> Result<()> {

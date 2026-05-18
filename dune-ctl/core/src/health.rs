@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use crate::{battlegroup, config::Config, diagnostics, fls, gateway};
+use crate::{battlegroup, config::Config, diagnostics, fls, gateway, players};
 
 #[derive(Debug, Clone)]
 pub struct HealthSnapshot {
@@ -18,6 +18,7 @@ pub struct HealthSnapshot {
     pub fls: Option<fls::FlsTokenStatus>,
     pub ram_used_bytes: Option<u64>,
     pub ram_total_bytes: Option<u64>,
+    pub players_online: Option<usize>,
 }
 
 impl HealthSnapshot {
@@ -30,6 +31,7 @@ impl HealthSnapshot {
         let gateway_status = gateway::status(cfg).await.ok();
         let diagnostics = diagnostics::DiagnosticsSnapshot::collect().await;
         let (ram_used, ram_total) = read_meminfo().await;
+        let players_online = players::count_online(cfg).await.ok();
 
         Ok(Self {
             battlegroup_phase: bg.phase,
@@ -46,6 +48,7 @@ impl HealthSnapshot {
             fls: fls_status,
             ram_used_bytes: ram_used,
             ram_total_bytes: ram_total,
+            players_online,
         })
     }
 }
