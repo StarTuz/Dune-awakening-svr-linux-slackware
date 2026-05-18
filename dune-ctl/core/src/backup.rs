@@ -12,6 +12,22 @@ pub struct BackupEntry {
     pub timestamp: String,
     pub path: PathBuf,
     pub has_db: bool,
+    pub size_bytes: u64,
+}
+
+pub fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1_024;
+    const MB: u64 = 1_024 * KB;
+    const GB: u64 = 1_024 * MB;
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
 }
 
 /// Run dune-backup.sh, streaming its output to stdout.
@@ -109,15 +125,32 @@ pub async fn list(cfg: &Config) -> Result<Vec<BackupEntry>> {
         let has_db = tokio::fs::try_exists(path.join("database"))
             .await
             .unwrap_or(false);
+        let size_bytes = dir_size_bytes(&path).await;
         entries.push(BackupEntry {
             timestamp: name.to_string(),
             path,
             has_db,
+            size_bytes,
         });
     }
     // Timestamps are YYYYMMDD-HHMMSS — lexicographic order = newest first
     entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     Ok(entries)
+}
+
+async fn dir_size_bytes(path: &PathBuf) -> u64 {
+    let out = Command::new("du")
+        .args(["-sb", &path.to_string_lossy().as_ref()])
+        .output()
+        .await;
+    match out {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
+            .split_whitespace()
+            .next()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0),
+        _ => 0,
+    }
 }
 
 fn resolve_bundle(cfg: &Config, bundle: &str) -> PathBuf {

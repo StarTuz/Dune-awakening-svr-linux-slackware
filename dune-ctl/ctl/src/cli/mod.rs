@@ -797,13 +797,14 @@ async fn cmd_backup(action: BackupCommand, cfg: &Config) -> Result<()> {
                 println!("No backups found in /srv/backups/dune/{}.", cfg.battlegroup);
                 return Ok(());
             }
-            println!("{:<20} {:<5} Path", "Timestamp", "DB");
-            println!("{}", "-".repeat(72));
+            println!("{:<20} {:<5} {:<10} Path", "Timestamp", "DB", "Size");
+            println!("{}", "-".repeat(80));
             for e in &entries {
                 println!(
-                    "{:<20} {:<5} {}",
+                    "{:<20} {:<5} {:<10} {}",
                     e.timestamp,
                     if e.has_db { "yes" } else { "no" },
+                    backup::format_size(e.size_bytes),
                     e.path.display()
                 );
             }
