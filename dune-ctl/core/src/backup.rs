@@ -119,6 +119,59 @@ pub async fn prune(cfg: &Config, keep: usize) -> Result<Vec<PathBuf>> {
     Ok(to_remove)
 }
 
+/// Run dune-backup.sh, sending each output line to `tx` instead of stdout.
+/// Stderr lines are prefixed with "[err] ". Used by the TUI backups tab.
+pub async fn run_streamed(
+    cfg: &Config,
+    skip_db: bool,
+    name: Option<&str>,
+    tx: tokio::sync::mpsc::UnboundedSender<String>,
+) -> Result<()> {
+    use std::process::Stdio;
+    use tokio::io::AsyncBufReadExt;
+
+    let script = cfg.scripts_dir.join("dune-backup.sh");
+    let mut cmd = Command::new("bash");
+    cmd.arg(&script);
+    cmd.args(["--bg", &cfg.battlegroup]);
+    if skip_db {
+        cmd.arg("--skip-db");
+    }
+    if let Some(n) = name {
+        cmd.args(["--name", n]);
+    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("failed to spawn {}: {}", script.display(), e))?;
+
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
+    let tx2 = tx.clone();
+
+    let stdout_task = tokio::spawn(async move {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = tx.send(line);
+        }
+    });
+    let stderr_task = tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = tx2.send(format!("[err] {}", line));
+        }
+    });
+
+    let status = child.wait().await?;
+    let _ = stdout_task.await;
+    let _ = stderr_task.await;
+
+    if !status.success() {
+        anyhow::bail!("{} exited with status {}", script.display(), status);
+    }
+    Ok(())
+}
+
 /// List backup bundles for the current battlegroup, newest first.
 pub async fn list(cfg: &Config) -> Result<Vec<BackupEntry>> {
     let bg_dir = PathBuf::from(BACKUP_ROOT).join(&cfg.battlegroup);

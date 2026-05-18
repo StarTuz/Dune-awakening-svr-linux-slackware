@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use dune_ctl_core::{
+    backup,
     config::{Config, WorldProfile},
     gateway,
     health::HealthSnapshot,
@@ -18,6 +19,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(5);
 const EVENT_TIMEOUT: Duration = Duration::from_millis(200);
 type RefreshResult = Result<(HealthSnapshot, Vec<settings::SettingValue>)>;
 type LogsResult = Result<Vec<String>>;
+type BackupListResult = Result<Vec<backup::BackupEntry>>;
 
 pub struct App {
     pub cfg: Config,
@@ -30,6 +32,12 @@ pub struct App {
     pub log: VecDeque<String>,
     pub log_lines: Vec<String>,
     pub logs_selected: usize,
+    pub backup_entries: Vec<backup::BackupEntry>,
+    pub backup_list_task: Option<JoinHandle<BackupListResult>>,
+    pub backup_task: Option<JoinHandle<Result<()>>>,
+    pub backup_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+    pub backup_lines: Vec<String>,
+    pub backup_list_loading: bool,
     pub view: View,
     pub selected: usize,
     pub settings_selected: usize,
@@ -46,6 +54,7 @@ pub enum View {
     Maps,
     Settings,
     Logs,
+    Backups,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +67,7 @@ pub enum PendingAction {
     PullDeployedSettings,
     InitWorldSettings,
     ClearSietchPassword,
+    RunBackup,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +88,7 @@ impl PendingAction {
             Self::PullDeployedSettings => "pull deployed settings to local",
             Self::InitWorldSettings => "initialize world settings profile",
             Self::ClearSietchPassword => "clear sietch password",
+            Self::RunBackup => "run full backup",
         }
     }
 
@@ -107,6 +118,9 @@ impl PendingAction {
             Self::ClearSietchPassword => {
                 "Sets the local Sietch password to an empty string. Deploy settings to make it live."
             }
+            Self::RunBackup => {
+                "Runs dune-backup.sh: DB dump, k8s metadata, and settings snapshot. Takes 1–3 minutes. Output streams in the lower pane."
+            }
         }
     }
 }
@@ -125,6 +139,12 @@ impl App {
             log: VecDeque::with_capacity(64),
             log_lines: Vec::new(),
             logs_selected: 0,
+            backup_entries: Vec::new(),
+            backup_list_task: None,
+            backup_task: None,
+            backup_rx: None,
+            backup_lines: Vec::new(),
+            backup_list_loading: false,
             view: View::Dashboard,
             selected: 0,
             settings_selected: 0,
@@ -192,6 +212,8 @@ pub async fn run_loop<B: Backend>(terminal: &mut Terminal<B>, cfg: &Config) -> R
     while app.running {
         finish_refresh(&mut app).await;
         finish_logs_task(&mut app).await;
+        finish_backup_list_task(&mut app).await;
+        finish_backup_task(&mut app).await;
         terminal.draw(|f| ui::draw(f, &app))?;
 
         if event::poll(EVENT_TIMEOUT)? {
@@ -204,6 +226,9 @@ pub async fn run_loop<B: Backend>(terminal: &mut Terminal<B>, cfg: &Config) -> R
             start_refresh(&mut app);
             if app.view == View::Logs {
                 start_logs_refresh(&mut app);
+            }
+            if app.view == View::Backups {
+                start_backup_list_refresh(&mut app);
             }
             last_poll = Instant::now();
         }
@@ -301,6 +326,92 @@ async fn finish_logs_task(app: &mut App) {
     }
 }
 
+fn start_backup_list_refresh(app: &mut App) {
+    if app.backup_list_task.is_some() {
+        return;
+    }
+    app.backup_list_loading = true;
+    let cfg = app.cfg.clone();
+    app.backup_list_task = Some(tokio::spawn(async move { backup::list(&cfg).await }));
+}
+
+async fn finish_backup_list_task(app: &mut App) {
+    if !app
+        .backup_list_task
+        .as_ref()
+        .map(|t| t.is_finished())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let Some(task) = app.backup_list_task.take() else {
+        return;
+    };
+    match task.await {
+        Ok(Ok(entries)) => {
+            app.backup_entries = entries;
+            app.backup_list_loading = false;
+        }
+        Ok(Err(e)) => {
+            app.push_log(format!("backup list error: {:#}", e));
+            app.backup_list_loading = false;
+        }
+        Err(e) => {
+            app.push_log(format!("backup list task error: {}", e));
+            app.backup_list_loading = false;
+        }
+    }
+}
+
+pub fn start_backup_run(app: &mut App) {
+    if app.backup_task.is_some() {
+        return;
+    }
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    app.backup_rx = Some(rx);
+    app.backup_lines.clear();
+    let cfg = app.cfg.clone();
+    app.backup_task = Some(tokio::spawn(async move {
+        backup::run_streamed(&cfg, false, None, tx).await
+    }));
+    app.push_log("backup run started");
+}
+
+async fn finish_backup_task(app: &mut App) {
+    // Drain any new output lines each tick regardless of task completion
+    if let Some(rx) = app.backup_rx.as_mut() {
+        while let Ok(line) = rx.try_recv() {
+            app.backup_lines.push(line);
+        }
+    }
+    if !app
+        .backup_task
+        .as_ref()
+        .map(|t| t.is_finished())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    // Final drain after task finishes
+    if let Some(rx) = app.backup_rx.as_mut() {
+        while let Ok(line) = rx.try_recv() {
+            app.backup_lines.push(line);
+        }
+    }
+    let Some(task) = app.backup_task.take() else {
+        return;
+    };
+    app.backup_rx = None;
+    match task.await {
+        Ok(Ok(())) => {
+            app.push_log("backup complete");
+            start_backup_list_refresh(app);
+        }
+        Ok(Err(e)) => app.push_log(format!("backup error: {:#}", e)),
+        Err(e) => app.push_log(format!("backup task error: {}", e)),
+    }
+}
+
 async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     if app.input.is_some() {
         handle_input_key(app, code).await;
@@ -334,10 +445,14 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 View::Dashboard => View::Maps,
                 View::Maps => View::Settings,
                 View::Settings => View::Logs,
-                View::Logs => View::Worlds,
+                View::Logs => View::Backups,
+                View::Backups => View::Worlds,
             };
             if app.view == View::Logs {
                 start_logs_refresh(app);
+            }
+            if app.view == View::Backups {
+                start_backup_list_refresh(app);
             }
         }
         KeyCode::Char('1') => {
@@ -355,6 +470,10 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('5') => {
             app.view = View::Logs;
             start_logs_refresh(app);
+        }
+        KeyCode::Char('6') => {
+            app.view = View::Backups;
+            start_backup_list_refresh(app);
         }
         KeyCode::Char('A') => {
             app.pending = Some(PendingAction::StartSietch);
@@ -475,11 +594,19 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
             }
         }
         KeyCode::Char('r') => {
-            app.push_log("refreshing...");
-            start_refresh(app);
-            if app.view == View::Logs {
-                app.logs_task = None;
-                start_logs_refresh(app);
+            if app.view == View::Backups && app.backup_task.is_none() {
+                app.pending = Some(PendingAction::RunBackup);
+            } else {
+                app.push_log("refreshing...");
+                start_refresh(app);
+                if app.view == View::Logs {
+                    app.logs_task = None;
+                    start_logs_refresh(app);
+                }
+                if app.view == View::Backups {
+                    app.backup_list_task = None;
+                    start_backup_list_refresh(app);
+                }
             }
         }
         _ => {}
@@ -582,6 +709,10 @@ async fn execute_pending(app: &mut App) {
         PendingAction::PullDeployedSettings => settings::pull_deployed(&app.cfg).await,
         PendingAction::InitWorldSettings => app.cfg.init_world_settings().map(|_| ()),
         PendingAction::ClearSietchPassword => settings::set(&app.cfg, "sietch_password", "").await,
+        PendingAction::RunBackup => {
+            start_backup_run(app);
+            Ok(())
+        }
     };
     match result {
         Ok(()) => {

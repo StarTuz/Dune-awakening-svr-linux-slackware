@@ -1,4 +1,5 @@
 use dune_ctl_core::{
+    backup,
     battlegroup::{MapConsistency, MapEntry, SietchEntry},
     diagnostics::{Check, CheckState},
     fls::FlsTokenState,
@@ -16,6 +17,28 @@ use ratatui::{
 };
 
 use super::app::{build_log_targets, App, View};
+
+fn format_backup_age(timestamp: &str, now: &chrono::DateTime<chrono::Local>) -> String {
+    use chrono::NaiveDateTime;
+    let Ok(ndt) = NaiveDateTime::parse_from_str(timestamp, "%Y%m%d-%H%M%S") else {
+        return "—".to_string();
+    };
+    let Some(dt) = ndt.and_local_timezone(chrono::Local).single() else {
+        return "—".to_string();
+    };
+    let secs = now.signed_duration_since(dt).num_seconds();
+    if secs < 0 {
+        return "future".to_string();
+    }
+    if secs < 3600 {
+        return format!("{}m ago", secs / 60);
+    }
+    let hours = secs / 3600;
+    if hours < 48 {
+        return format!("{}h ago", hours);
+    }
+    format!("{}d ago", hours / 24)
+}
 
 pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
@@ -37,6 +60,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         View::Maps => draw_maps_view(f, app, chunks[2]),
         View::Settings => draw_settings_view(f, app, chunks[2]),
         View::Logs => draw_logs_view(f, app, chunks[2]),
+        View::Backups => draw_backups_view(f, app, chunks[2]),
     }
     draw_log(f, app, chunks[3]);
     draw_hints(f, app, chunks[4]);
@@ -177,8 +201,16 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         View::Maps => 2,
         View::Settings => 3,
         View::Logs => 4,
+        View::Backups => 5,
     };
-    let titles = ["1 Worlds", "2 Dashboard", "3 Maps", "4 Settings", "5 Logs"];
+    let titles = [
+        "1 Worlds",
+        "2 Dashboard",
+        "3 Maps",
+        "4 Settings",
+        "5 Logs",
+        "6 Backups",
+    ];
     f.render_widget(
         Tabs::new(titles)
             .select(selected)
@@ -728,7 +760,14 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
         View::Settings => {
             "[Tab/5] logs  [N/P/C] name/pass  [e/t] edit/toggle  [U] pull  [a] apply  [D] deploy+restart  [q] quit"
         }
-        View::Logs => "[Tab/1] worlds  [↑/↓] select target  [r] refresh  [q] quit",
+        View::Logs => "[Tab/6] backups  [↑/↓] select target  [r] refresh  [q] quit",
+        View::Backups => {
+            if app.backup_task.is_some() {
+                "[backup running...]  [q] quit"
+            } else {
+                "[Tab/1] worlds  [r] run backup  [q] quit"
+            }
+        }
     };
     f.render_widget(
         Paragraph::new(hint).style(Style::default().fg(Color::DarkGray)),
@@ -795,6 +834,105 @@ fn draw_logs_lines(f: &mut Frame, app: &App, area: Rect) {
             .take(visible)
             .rev()
             .map(|l| Line::from(l.as_str()))
+            .collect()
+    };
+
+    f.render_widget(
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title)),
+        area,
+    );
+}
+
+fn draw_backups_view(f: &mut Frame, app: &App, area: Rect) {
+    let show_output = app.backup_task.is_some() || !app.backup_lines.is_empty();
+    let chunks = if show_output {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(100), Constraint::Percentage(0)])
+            .split(area)
+    };
+
+    draw_backup_list(f, app, chunks[0]);
+    if show_output {
+        draw_backup_output(f, app, chunks[1]);
+    }
+}
+
+fn draw_backup_list(f: &mut Frame, app: &App, area: Rect) {
+    let now = chrono::Local::now();
+    let loading_suffix = if app.backup_list_loading { " [loading]" } else { "" };
+    let title = format!("Backups{}", loading_suffix);
+
+    let rows: Vec<Row> = if app.backup_entries.is_empty() {
+        vec![Row::new(vec![Cell::from(if app.backup_list_loading {
+            "Loading...".to_string()
+        } else {
+            "No backups found.".to_string()
+        })])]
+    } else {
+        app.backup_entries
+            .iter()
+            .map(|entry| {
+                let age = format_backup_age(&entry.timestamp, &now);
+                let db = if entry.has_db { "yes" } else { "no" };
+                let size = backup::format_size(entry.size_bytes);
+                Row::new(vec![
+                    Cell::from(entry.timestamp.clone()),
+                    Cell::from(age),
+                    Cell::from(db),
+                    Cell::from(size),
+                ])
+            })
+            .collect()
+    };
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(17),
+            Constraint::Length(10),
+            Constraint::Length(5),
+            Constraint::Length(10),
+        ],
+    )
+    .header(header_row(vec!["Timestamp", "Age", "DB", "Size"]))
+    .block(Block::default().borders(Borders::ALL).title(title));
+    f.render_widget(table, area);
+}
+
+fn draw_backup_output(f: &mut Frame, app: &App, area: Rect) {
+    let running = app.backup_task.is_some();
+    let title = if running {
+        "Backup Output (running...)"
+    } else {
+        "Backup Output"
+    };
+
+    let visible = (area.height as usize).saturating_sub(2);
+    let lines: Vec<Line> = if app.backup_lines.is_empty() {
+        vec![Line::from(Span::styled(
+            "Starting backup...",
+            Style::default().fg(Color::DarkGray),
+        ))]
+    } else {
+        app.backup_lines
+            .iter()
+            .rev()
+            .take(visible)
+            .rev()
+            .map(|l| {
+                let style = if l.starts_with("[err]") {
+                    Style::default().fg(Color::Red)
+                } else {
+                    Style::default()
+                };
+                Line::from(Span::styled(l.as_str().to_string(), style))
+            })
             .collect()
     };
 
