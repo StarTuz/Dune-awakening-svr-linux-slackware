@@ -33,6 +33,8 @@ pub struct App {
     pub log_lines: Vec<String>,
     pub logs_selected: usize,
     pub backup_entries: Vec<backup::BackupEntry>,
+    pub backup_selected: usize,
+    pub backup_schedule: Option<backup::ScheduleInfo>,
     pub backup_list_task: Option<JoinHandle<BackupListResult>>,
     pub backup_task: Option<JoinHandle<Result<()>>>,
     pub backup_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
@@ -68,6 +70,15 @@ pub enum PendingAction {
     InitWorldSettings,
     ClearSietchPassword,
     RunBackup,
+    DeleteBackup,
+    RemoveSchedule,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputAction {
+    SetSetting,
+    SetBackupCron,
+    SetBackupKeep,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +86,7 @@ pub struct InputMode {
     pub key: String,
     pub label: String,
     pub value: String,
+    pub action: InputAction,
 }
 
 impl PendingAction {
@@ -89,6 +101,8 @@ impl PendingAction {
             Self::InitWorldSettings => "initialize world settings profile",
             Self::ClearSietchPassword => "clear sietch password",
             Self::RunBackup => "run full backup",
+            Self::DeleteBackup => "delete backup bundle",
+            Self::RemoveSchedule => "remove backup schedule",
         }
     }
 
@@ -121,6 +135,12 @@ impl PendingAction {
             Self::RunBackup => {
                 "Runs dune-backup.sh: DB dump, k8s metadata, and settings snapshot. Takes 1–3 minutes. Output streams in the lower pane."
             }
+            Self::DeleteBackup => {
+                "Permanently deletes the selected backup bundle from disk. Cannot be undone."
+            }
+            Self::RemoveSchedule => {
+                "Removes the nightly backup cron job. Existing backup data is not deleted."
+            }
         }
     }
 }
@@ -140,6 +160,8 @@ impl App {
             log_lines: Vec::new(),
             logs_selected: 0,
             backup_entries: Vec::new(),
+            backup_selected: 0,
+            backup_schedule: backup::read_schedule(),
             backup_list_task: None,
             backup_task: None,
             backup_rx: None,
@@ -350,6 +372,9 @@ async fn finish_backup_list_task(app: &mut App) {
     match task.await {
         Ok(Ok(entries)) => {
             app.backup_entries = entries;
+            if app.backup_selected >= app.backup_entries.len() {
+                app.backup_selected = app.backup_entries.len().saturating_sub(1);
+            }
             app.backup_list_loading = false;
         }
         Ok(Err(e)) => {
@@ -507,6 +532,10 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
             View::Settings if !app.settings.is_empty() => {
                 app.settings_selected = (app.settings_selected + 1) % app.settings.len();
             }
+            View::Backups if !app.backup_entries.is_empty() => {
+                app.backup_selected =
+                    (app.backup_selected + 1).min(app.backup_entries.len() - 1);
+            }
             _ if map_count > 0 => {
                 app.view = View::Maps;
                 app.selected = (app.selected + 1) % map_count;
@@ -522,6 +551,9 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
             View::Settings if !app.settings.is_empty() && app.settings_selected > 0 => {
                 app.settings_selected -= 1;
             }
+            View::Backups if app.backup_selected > 0 => {
+                app.backup_selected -= 1;
+            }
             _ if map_count > 0 && app.selected > 0 => {
                 app.view = View::Maps;
                 app.selected -= 1;
@@ -536,6 +568,26 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('e') => {
             if app.view == View::Settings {
                 begin_setting_edit(app);
+            } else if app.view == View::Backups {
+                begin_backup_cron_edit(app);
+            }
+        }
+        KeyCode::Char('K') => {
+            if app.view == View::Backups {
+                begin_backup_keep_edit(app);
+            }
+        }
+        KeyCode::Char('X') => {
+            if app.view == View::Backups && app.backup_schedule.is_some() {
+                app.pending = Some(PendingAction::RemoveSchedule);
+            }
+        }
+        KeyCode::Char('d') => {
+            if app.view == View::Backups
+                && !app.backup_entries.is_empty()
+                && app.backup_task.is_none()
+            {
+                app.pending = Some(PendingAction::DeleteBackup);
             }
         }
         KeyCode::Char('a') => {
@@ -623,18 +675,67 @@ async fn handle_input_key(app: &mut App, code: KeyCode) {
             let Some(input) = app.input.take() else {
                 return;
             };
-            match settings::set(&app.cfg, &input.key, &input.value).await {
-                Ok(()) => {
-                    if input.key == "sietch_password" {
-                        app.push_log("sietch_password updated locally");
-                    } else {
-                        app.push_log(format!("{} set to {}", input.key, input.value));
+            match input.action {
+                InputAction::SetSetting => {
+                    match settings::set(&app.cfg, &input.key, &input.value).await {
+                        Ok(()) => {
+                            if input.key == "sietch_password" {
+                                app.push_log("sietch_password updated locally");
+                            } else {
+                                app.push_log(format!("{} set to {}", input.key, input.value));
+                            }
+                            start_refresh(app);
+                        }
+                        Err(e) => {
+                            app.push_log(format!("settings edit error: {:#}", e));
+                            app.input = Some(input);
+                        }
                     }
-                    start_refresh(app);
                 }
-                Err(e) => {
-                    app.push_log(format!("settings edit error: {:#}", e));
-                    app.input = Some(input);
+                InputAction::SetBackupCron => {
+                    let keep = app.backup_schedule.as_ref().map(|s| s.keep).unwrap_or(14);
+                    let bin = current_exe_path();
+                    match backup::write_schedule(&app.cfg.battlegroup, &bin, &input.value, keep) {
+                        Ok(()) => {
+                            app.backup_schedule = backup::read_schedule();
+                            app.push_log(format!("schedule cron set to {}", input.value));
+                        }
+                        Err(e) => {
+                            app.push_log(format!("schedule error: {:#}", e));
+                            app.input = Some(input);
+                        }
+                    }
+                }
+                InputAction::SetBackupKeep => {
+                    match input.value.trim().parse::<usize>() {
+                        Ok(keep) => {
+                            let cron = app
+                                .backup_schedule
+                                .as_ref()
+                                .map(|s| s.cron.clone())
+                                .unwrap_or_else(|| "0 3 * * *".to_string());
+                            let bin = current_exe_path();
+                            match backup::write_schedule(
+                                &app.cfg.battlegroup,
+                                &bin,
+                                &cron,
+                                keep,
+                            ) {
+                                Ok(()) => {
+                                    app.backup_schedule = backup::read_schedule();
+                                    app.push_log(format!("schedule keep set to {}", keep));
+                                }
+                                Err(e) => {
+                                    app.push_log(format!("schedule error: {:#}", e));
+                                    app.input = Some(input);
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            app.push_log("keep must be a whole number (0 = no pruning)");
+                            app.input = Some(input);
+                        }
+                    }
                 }
             }
         }
@@ -680,7 +781,47 @@ fn begin_setting_edit(app: &mut App) {
         key: item.def.key.to_string(),
         label: item.def.label.to_string(),
         value,
+        action: InputAction::SetSetting,
     });
+}
+
+fn begin_backup_cron_edit(app: &mut App) {
+    let current = app
+        .backup_schedule
+        .as_ref()
+        .map(|s| s.cron.clone())
+        .unwrap_or_else(|| "0 3 * * *".to_string());
+    app.input = Some(InputMode {
+        key: "backup_cron".to_string(),
+        label: "Cron schedule (e.g. '0 3 * * *' = daily 3am, '0 */6 * * *' = every 6h). Enter to save.".to_string(),
+        value: current,
+        action: InputAction::SetBackupCron,
+    });
+}
+
+fn begin_backup_keep_edit(app: &mut App) {
+    let current = app
+        .backup_schedule
+        .as_ref()
+        .map(|s| s.keep.to_string())
+        .unwrap_or_else(|| "14".to_string());
+    app.input = Some(InputMode {
+        key: "backup_keep".to_string(),
+        label: "Number of bundles to retain (0 = no pruning). Enter to save.".to_string(),
+        value: current,
+        action: InputAction::SetBackupKeep,
+    });
+}
+
+fn current_exe_path() -> String {
+    std::env::current_exe()
+        .unwrap_or_else(|_| {
+            std::path::PathBuf::from(
+                "/home/dune/dune-server/dune-ctl/target/release/dune-ctl",
+            )
+        })
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn begin_setting_edit_by_key(app: &mut App, key: &str) {
@@ -713,10 +854,33 @@ async fn execute_pending(app: &mut App) {
             start_backup_run(app);
             Ok(())
         }
+        PendingAction::DeleteBackup => {
+            if let Some(entry) = app.backup_entries.get(app.backup_selected) {
+                let path = entry.path.clone();
+                backup::delete_bundle(&path).await
+            } else {
+                Ok(())
+            }
+        }
+        PendingAction::RemoveSchedule => backup::remove_schedule(),
     };
     match result {
         Ok(()) => {
             app.push_log(format!("{} triggered", action.label()));
+            // backup-specific follow-up (no cluster refresh needed)
+            if action == PendingAction::DeleteBackup {
+                if app.backup_selected > 0
+                    && app.backup_selected >= app.backup_entries.len().saturating_sub(1)
+                {
+                    app.backup_selected = app.backup_selected.saturating_sub(1);
+                }
+                start_backup_list_refresh(app);
+                return;
+            }
+            if action == PendingAction::RemoveSchedule {
+                app.backup_schedule = backup::read_schedule();
+                return;
+            }
             app.push_target_log();
             if matches!(
                 action,

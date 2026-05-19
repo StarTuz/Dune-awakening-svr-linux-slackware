@@ -8,6 +8,112 @@ use crate::config::Config;
 const BACKUP_ROOT: &str = "/srv/backups/dune";
 const FUNCOM_DB_DUMPS: &str = "/funcom/artifacts/database-dumps";
 
+pub const CRON_MARKER: &str = "# dune-ctl-backup";
+
+pub struct ScheduleInfo {
+    pub cron: String,
+    pub keep: usize,
+}
+
+/// Read the installed backup schedule from the user's crontab.
+pub fn read_schedule() -> Option<ScheduleInfo> {
+    let out = std::process::Command::new("crontab")
+        .arg("-l")
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().find(|l| l.ends_with(CRON_MARKER))?;
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    if fields.len() < 5 {
+        return None;
+    }
+    let cron = fields[..5].join(" ");
+    let keep = fields
+        .windows(2)
+        .find(|w| w[0] == "--keep")
+        .and_then(|w| w[1].parse::<usize>().ok())
+        .unwrap_or(14);
+    Some(ScheduleInfo { cron, keep })
+}
+
+/// Install or update the backup schedule in the user's crontab.
+pub fn write_schedule(battlegroup: &str, binary_path: &str, cron: &str, keep: usize) -> Result<()> {
+    let current = read_crontab()?;
+    let stripped = strip_schedule_line(&current);
+    let entry = format!(
+        "{}  DUNE_CTL_WORLD={} {} backup run --keep {}  {}",
+        cron, battlegroup, binary_path, keep, CRON_MARKER,
+    );
+    let new_crontab = if stripped.is_empty() {
+        format!("{}\n", entry)
+    } else {
+        format!("{}\n{}\n", stripped, entry)
+    };
+    write_crontab(&new_crontab)
+}
+
+/// Remove the installed backup schedule from the user's crontab.
+pub fn remove_schedule() -> Result<()> {
+    let current = read_crontab()?;
+    let stripped = strip_schedule_line(&current);
+    let new = if stripped.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", stripped)
+    };
+    write_crontab(&new)
+}
+
+/// Delete a backup bundle directory.
+pub async fn delete_bundle(path: &std::path::Path) -> Result<()> {
+    tokio::fs::remove_dir_all(path)
+        .await
+        .with_context(|| format!("failed to delete bundle {}", path.display()))
+}
+
+fn strip_schedule_line(crontab: &str) -> String {
+    crontab
+        .lines()
+        .filter(|l| !l.ends_with(CRON_MARKER))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string()
+}
+
+fn read_crontab() -> Result<String> {
+    let out = std::process::Command::new("crontab")
+        .arg("-l")
+        .output()
+        .context("failed to run crontab -l")?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        Ok(String::new())
+    }
+}
+
+fn write_crontab(content: &str) -> Result<()> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = std::process::Command::new("crontab")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .spawn()
+        .context("failed to spawn crontab -")?;
+    child
+        .stdin
+        .as_mut()
+        .expect("stdin piped")
+        .write_all(content.as_bytes())
+        .context("failed to write crontab")?;
+    let status = child.wait()?;
+    if !status.success() {
+        anyhow::bail!("crontab - exited with {}", status);
+    }
+    Ok(())
+}
+
 pub struct BackupEntry {
     pub timestamp: String,
     pub path: PathBuf,

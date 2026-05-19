@@ -764,8 +764,10 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
         View::Backups => {
             if app.backup_task.is_some() {
                 "[backup running...]  [q] quit"
+            } else if !app.backup_entries.is_empty() {
+                "[↑/↓] select  [r] run  [d] delete  [e] cron  [K] keep  [X] rm schedule  [Tab/1] worlds  [q] quit"
             } else {
-                "[Tab/1] worlds  [r] run backup  [q] quit"
+                "[r] run backup  [e] schedule  [q] quit"
             }
         }
     };
@@ -845,22 +847,59 @@ fn draw_logs_lines(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_backups_view(f: &mut Frame, app: &App, area: Rect) {
     let show_output = app.backup_task.is_some() || !app.backup_lines.is_empty();
-    let chunks = if show_output {
-        Layout::default()
+
+    // Top 3 lines: schedule bar; remaining space: list [+ output]
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(area);
+
+    draw_backup_schedule_bar(f, app, outer[0]);
+
+    if show_output {
+        let inner = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .split(area)
+            .split(outer[1]);
+        draw_backup_list(f, app, inner[0]);
+        draw_backup_output(f, app, inner[1]);
     } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(100), Constraint::Percentage(0)])
-            .split(area)
-    };
-
-    draw_backup_list(f, app, chunks[0]);
-    if show_output {
-        draw_backup_output(f, app, chunks[1]);
+        draw_backup_list(f, app, outer[1]);
     }
+}
+
+fn draw_backup_schedule_bar(f: &mut Frame, app: &App, area: Rect) {
+    let line = match &app.backup_schedule {
+        Some(info) => Line::from(vec![
+            Span::styled("Cron: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(info.cron.clone(), Style::default().fg(Color::Green)),
+            Span::raw("   "),
+            Span::styled("Keep: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{} bundles", info.keep),
+                Style::default().fg(Color::Green),
+            ),
+            Span::styled(
+                "   [e] edit cron  [K] edit keep  [X] remove",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+        None => Line::from(vec![
+            Span::styled(
+                "No schedule installed.  ",
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled(
+                "[e] install  (default: 0 3 * * *, keep 14)",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+    };
+    f.render_widget(
+        Paragraph::new(line)
+            .block(Block::default().borders(Borders::ALL).title("Schedule")),
+        area,
+    );
 }
 
 fn draw_backup_list(f: &mut Frame, app: &App, area: Rect) {
@@ -877,16 +916,23 @@ fn draw_backup_list(f: &mut Frame, app: &App, area: Rect) {
     } else {
         app.backup_entries
             .iter()
-            .map(|entry| {
+            .enumerate()
+            .map(|(i, entry)| {
                 let age = format_backup_age(&entry.timestamp, &now);
                 let db = if entry.has_db { "yes" } else { "no" };
                 let size = backup::format_size(entry.size_bytes);
+                let style = if i == app.backup_selected {
+                    Style::default().bg(Color::DarkGray)
+                } else {
+                    Style::default()
+                };
                 Row::new(vec![
                     Cell::from(entry.timestamp.clone()),
                     Cell::from(age),
                     Cell::from(db),
                     Cell::from(size),
                 ])
+                .style(style)
             })
             .collect()
     };

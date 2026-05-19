@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Subcommand;
 use dune_ctl_core::{
     backup, battlegroup,
@@ -901,58 +901,28 @@ async fn cmd_players(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
-const CRON_MARKER: &str = "# dune-ctl-backup";
-
 fn cmd_schedule(show: bool, remove: bool, cron: &str, keep: usize, cfg: &Config) -> Result<()> {
-    let current = read_user_crontab()?;
-
     if show {
-        match current.lines().find(|l| l.contains(CRON_MARKER)) {
-            Some(line) => println!("{}", line),
+        match backup::read_schedule() {
+            Some(info) => {
+                println!("Schedule : {}", info.cron);
+                println!("Keep     : {} bundles", info.keep);
+            }
             None => println!("No dune-ctl backup schedule installed."),
         }
         return Ok(());
     }
 
-    // Strip any existing dune-ctl-backup line
-    let stripped: String = current
-        .lines()
-        .filter(|l| !l.contains(CRON_MARKER))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let stripped = stripped.trim_end().to_string();
-
     if remove {
-        let new = if stripped.is_empty() {
-            String::new()
-        } else {
-            format!("{}\n", stripped)
-        };
-        write_user_crontab(&new)?;
+        backup::remove_schedule()?;
         println!("dune-ctl backup schedule removed.");
         return Ok(());
     }
 
-    let bin = std::env::current_exe()
-        .unwrap_or_else(|_| std::path::PathBuf::from(
-            "/home/dune/dune-server/dune-ctl/target/release/dune-ctl",
-        ));
-    let entry = format!(
-        "{}  DUNE_CTL_WORLD={} {} backup run --keep {}  {}",
-        cron,
-        cfg.battlegroup,
-        bin.display(),
-        keep,
-        CRON_MARKER,
-    );
-
-    let new_crontab = if stripped.is_empty() {
-        format!("{}\n", entry)
-    } else {
-        format!("{}\n{}\n", stripped, entry)
-    };
-    write_user_crontab(&new_crontab)?;
-
+    let bin = std::env::current_exe().unwrap_or_else(|_| {
+        std::path::PathBuf::from("/home/dune/dune-server/dune-ctl/target/release/dune-ctl")
+    });
+    backup::write_schedule(&cfg.battlegroup, &bin.to_string_lossy(), cron, keep)?;
     println!("Backup schedule installed:");
     println!("  Schedule : {}", cron);
     println!("  Binary   : {}", bin.display());
@@ -960,40 +930,6 @@ fn cmd_schedule(show: bool, remove: bool, cron: &str, keep: usize, cfg: &Config)
     println!("  Keep     : {} most recent bundles", keep);
     println!();
     println!("Verify with: dune-ctl backup schedule --show");
-    Ok(())
-}
-
-fn read_user_crontab() -> Result<String> {
-    let out = std::process::Command::new("crontab")
-        .arg("-l")
-        .output()
-        .context("failed to run crontab -l")?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-    } else {
-        // "no crontab for user" exits non-zero — treat as empty
-        Ok(String::new())
-    }
-}
-
-fn write_user_crontab(content: &str) -> Result<()> {
-    use std::io::Write;
-    use std::process::Stdio;
-    let mut child = std::process::Command::new("crontab")
-        .arg("-")
-        .stdin(Stdio::piped())
-        .spawn()
-        .context("failed to spawn crontab -")?;
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin piped")
-        .write_all(content.as_bytes())
-        .context("failed to write crontab")?;
-    let status = child.wait()?;
-    if !status.success() {
-        anyhow::bail!("crontab - exited with status {}", status);
-    }
     Ok(())
 }
 
