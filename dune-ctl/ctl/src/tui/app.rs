@@ -27,6 +27,7 @@ pub struct App {
     pub snapshot: Option<HealthSnapshot>,
     pub settings: Vec<settings::SettingValue>,
     pub worlds: Vec<WorldProfile>,
+    pub world_selected: usize,
     pub refresh_task: Option<JoinHandle<RefreshResult>>,
     pub logs_task: Option<JoinHandle<LogsResult>>,
     pub log: VecDeque<String>,
@@ -148,12 +149,17 @@ impl PendingAction {
 impl App {
     fn new(cfg: Config) -> Self {
         let worlds = Config::discover_worlds().unwrap_or_default();
+        let world_selected = worlds
+            .iter()
+            .position(|world| world.battlegroup == cfg.battlegroup)
+            .unwrap_or(0);
         Self {
             cfg,
             started_at: Instant::now(),
             snapshot: None,
             settings: Vec::new(),
             worlds,
+            world_selected,
             refresh_task: None,
             logs_task: None,
             log: VecDeque::with_capacity(64),
@@ -175,6 +181,44 @@ impl App {
             loading: true,
             running: true,
         }
+    }
+
+    pub fn selected_world(&self) -> Option<&WorldProfile> {
+        self.worlds.get(self.world_selected)
+    }
+
+    pub fn retarget_world(&mut self, index: usize) -> bool {
+        let Some(world) = self.worlds.get(index).cloned() else {
+            return false;
+        };
+        if world.battlegroup == self.cfg.battlegroup {
+            self.world_selected = index;
+            return false;
+        }
+
+        self.cfg = Config::load(Some(&world.battlegroup)).unwrap_or_else(|_| self.cfg.clone());
+        self.world_selected = index;
+        self.snapshot = None;
+        self.settings.clear();
+        self.selected = 0;
+        self.settings_selected = 0;
+        self.logs_selected = 0;
+        self.backup_selected = 0;
+        self.log_lines.clear();
+        self.backup_lines.clear();
+        self.refresh_task = None;
+        self.logs_task = None;
+        self.backup_list_task = None;
+        self.backup_task = None;
+        self.backup_rx = None;
+        self.loading = true;
+        self.push_log(format!(
+            "retargeted to {} / {}",
+            world.title.as_deref().unwrap_or(&world.battlegroup),
+            world.battlegroup
+        ));
+        self.push_target_log();
+        true
     }
 
     pub fn push_log(&mut self, msg: impl Into<String>) {
@@ -269,6 +313,18 @@ fn start_refresh(app: &mut App) {
         let settings = settings::list(&cfg).await.unwrap_or_default();
         Ok((snap, settings))
     }));
+}
+
+fn refresh_world_context(app: &mut App) {
+    start_refresh(app);
+    if app.view == View::Logs {
+        app.logs_task = None;
+        start_logs_refresh(app);
+    }
+    if app.view == View::Backups {
+        app.backup_list_task = None;
+        start_backup_list_refresh(app);
+    }
 }
 
 async fn finish_refresh(app: &mut App) {
@@ -524,6 +580,12 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
             app.pending = Some(PendingAction::InitWorldSettings);
         }
         KeyCode::Down | KeyCode::Char('j') => match app.view {
+            View::Worlds if !app.worlds.is_empty() => {
+                let next = (app.world_selected + 1) % app.worlds.len();
+                if app.retarget_world(next) {
+                    refresh_world_context(app);
+                }
+            }
             View::Logs if log_target_count > 0 => {
                 app.logs_selected = (app.logs_selected + 1) % log_target_count;
                 app.logs_task = None;
@@ -542,6 +604,16 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
             _ => {}
         },
         KeyCode::Up | KeyCode::Char('k') => match app.view {
+            View::Worlds if !app.worlds.is_empty() => {
+                let next = if app.world_selected == 0 {
+                    app.worlds.len() - 1
+                } else {
+                    app.world_selected - 1
+                };
+                if app.retarget_world(next) {
+                    refresh_world_context(app);
+                }
+            }
             View::Logs if log_target_count > 0 && app.logs_selected > 0 => {
                 app.logs_selected -= 1;
                 app.logs_task = None;
@@ -649,15 +721,7 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 app.pending = Some(PendingAction::RunBackup);
             } else {
                 app.push_log("refreshing...");
-                start_refresh(app);
-                if app.view == View::Logs {
-                    app.logs_task = None;
-                    start_logs_refresh(app);
-                }
-                if app.view == View::Backups {
-                    app.backup_list_task = None;
-                    start_backup_list_refresh(app);
-                }
+                refresh_world_context(app);
             }
         }
         _ => {}

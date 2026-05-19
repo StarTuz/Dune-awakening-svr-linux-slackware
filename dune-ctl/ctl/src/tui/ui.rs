@@ -77,7 +77,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let phase = snap.map(|s| s.battlegroup_phase.as_str()).unwrap_or("—");
     let title = sietch_title(app, snap).unwrap_or("dune-ctl");
     let loading = if app.loading { " [loading]" } else { "" };
-    let multi_world_warning = app.worlds.len() > 1 && !app.cfg.explicit_target;
+    let active_world = app.cfg.title.as_deref().unwrap_or(&app.cfg.battlegroup);
 
     let fls_span = snap
         .and_then(|s| s.fls.as_ref())
@@ -120,6 +120,8 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         players_span,
     ]);
     let secondary = Line::from(vec![
+        Span::styled("world:", Style::default().fg(Color::DarkGray)),
+        Span::raw(format!("{}  ", active_world)),
         Span::styled("ns:", Style::default().fg(Color::DarkGray)),
         Span::raw(format!("{}  ", app.cfg.namespace)),
         Span::styled("settings:", Style::default().fg(Color::DarkGray)),
@@ -128,14 +130,6 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             app.cfg.user_settings_dir().display(),
             app.cfg.settings_profile_label()
         )),
-        if multi_world_warning {
-            Span::styled(
-                "  select with --world or DUNE_CTL_WORLD",
-                Style::default().fg(Color::Yellow),
-            )
-        } else {
-            Span::raw("")
-        },
     ]);
 
     if area.width < 96 {
@@ -238,10 +232,11 @@ fn draw_worlds_table(f: &mut Frame, app: &App, area: Rect) {
     let rows: Vec<Row> = app
         .worlds
         .iter()
-        .map(|world| {
-            let active = world.battlegroup == app.cfg.battlegroup;
+        .enumerate()
+        .map(|(idx, world)| {
+            let selected = idx == app.world_selected;
             Row::new(vec![
-                Cell::from(if active { "●" } else { "○" }),
+                Cell::from(if selected { "●" } else { "○" }),
                 Cell::from(world.title.clone().unwrap_or_else(|| "—".to_string())),
                 Cell::from(world.battlegroup.clone()),
                 Cell::from(if world_settings_profile_exists(&world.battlegroup) {
@@ -250,7 +245,7 @@ fn draw_worlds_table(f: &mut Frame, app: &App, area: Rect) {
                     "shared"
                 }),
             ])
-            .style(if active {
+            .style(if selected {
                 Style::default().fg(Color::Yellow)
             } else {
                 Style::default()
@@ -273,10 +268,9 @@ fn draw_worlds_table(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_world_detail(f: &mut Frame, app: &App, area: Rect) {
-    let title = app
-        .snapshot
-        .as_ref()
-        .and_then(|snap| snap.battlegroup_title.as_deref())
+    let world = app.selected_world();
+    let title = world
+        .and_then(|world| world.title.as_deref())
         .or(app.cfg.title.as_deref())
         .unwrap_or("—");
     let lines = vec![
@@ -284,8 +278,18 @@ fn draw_world_detail(f: &mut Frame, app: &App, area: Rect) {
             title.to_string(),
             Style::default().add_modifier(Modifier::BOLD),
         )),
-        Line::from(format!("Battlegroup: {}", app.cfg.battlegroup)),
-        Line::from(format!("Namespace: {}", app.cfg.namespace)),
+        Line::from(format!(
+            "Battlegroup: {}",
+            world
+                .map(|world| world.battlegroup.as_str())
+                .unwrap_or(&app.cfg.battlegroup)
+        )),
+        Line::from(format!(
+            "Namespace: {}",
+            world
+                .map(|world| world.namespace.as_str())
+                .unwrap_or(&app.cfg.namespace)
+        )),
         Line::from(format!("Settings: {}", app.cfg.settings_profile_label())),
         Line::from(format!("Path: {}", app.cfg.user_settings_dir().display())),
         Line::from(""),
@@ -295,7 +299,7 @@ fn draw_world_detail(f: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
         Line::from("[I] initializes a per-world settings profile"),
     ];
-    f.render_widget(panel("World Detail", lines), area);
+    f.render_widget(panel("World", lines), area);
 }
 
 fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
@@ -750,7 +754,7 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
     let hint = match app.view {
-        View::Worlds => "[Tab/2] dashboard  [I] init profile  [r] refresh  [q] quit",
+        View::Worlds => "[↑/↓] select world  [I] init profile  [r] refresh  [q] quit",
         View::Dashboard => {
             "[Tab/3] maps  [A/Z/R] primary sietch  [g] gateway  [r] refresh  [q] quit"
         }

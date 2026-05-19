@@ -58,6 +58,9 @@ dune-ctl
 | `r` | Refresh (re-fetches health snapshot and current view data) |
 | `q` | Quit |
 
+Tab `1` is the world selector. Use `↑`/`↓` there to switch capsules; the
+active world retargets immediately and tabs `2` through `6` follow that world.
+
 ### Maps view keys
 
 | Key | Action |
@@ -126,6 +129,9 @@ dune-ctl worlds init-settings # create per-world UserSettings profile
 `init-settings` copies the shared `server/scripts/setup/config/User*.ini`
 templates into `~/.dune/worlds/<battlegroup>/UserSettings/`. After this, all
 `settings` commands read/write that profile instead of the shared files.
+
+`dune-ctl worlds list` also includes capsule-backed worlds from
+`~/.dune/capsules/<env>/<bg>/capsule.env`.
 
 ### `dune-ctl capsules`
 
