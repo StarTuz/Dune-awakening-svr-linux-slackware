@@ -324,9 +324,9 @@ fn start_logs_refresh(app: &mut App) {
         None => return,
     };
     let cfg = app.cfg.clone();
-    app.logs_task = Some(tokio::spawn(async move {
-        logs::tail(&cfg, &target, 150).await
-    }));
+    app.logs_task = Some(tokio::spawn(
+        async move { logs::tail(&cfg, &target, 150).await },
+    ));
 }
 
 async fn finish_logs_task(app: &mut App) {
@@ -533,8 +533,7 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 app.settings_selected = (app.settings_selected + 1) % app.settings.len();
             }
             View::Backups if !app.backup_entries.is_empty() => {
-                app.backup_selected =
-                    (app.backup_selected + 1).min(app.backup_entries.len() - 1);
+                app.backup_selected = (app.backup_selected + 1).min(app.backup_entries.len() - 1);
             }
             _ if map_count > 0 => {
                 app.view = View::Maps;
@@ -706,37 +705,30 @@ async fn handle_input_key(app: &mut App, code: KeyCode) {
                         }
                     }
                 }
-                InputAction::SetBackupKeep => {
-                    match input.value.trim().parse::<usize>() {
-                        Ok(keep) => {
-                            let cron = app
-                                .backup_schedule
-                                .as_ref()
-                                .map(|s| s.cron.clone())
-                                .unwrap_or_else(|| "0 3 * * *".to_string());
-                            let bin = current_exe_path();
-                            match backup::write_schedule(
-                                &app.cfg.battlegroup,
-                                &bin,
-                                &cron,
-                                keep,
-                            ) {
-                                Ok(()) => {
-                                    app.backup_schedule = backup::read_schedule();
-                                    app.push_log(format!("schedule keep set to {}", keep));
-                                }
-                                Err(e) => {
-                                    app.push_log(format!("schedule error: {:#}", e));
-                                    app.input = Some(input);
-                                }
+                InputAction::SetBackupKeep => match input.value.trim().parse::<usize>() {
+                    Ok(keep) => {
+                        let cron = app
+                            .backup_schedule
+                            .as_ref()
+                            .map(|s| s.cron.clone())
+                            .unwrap_or_else(|| "0 3 * * *".to_string());
+                        let bin = current_exe_path();
+                        match backup::write_schedule(&app.cfg.battlegroup, &bin, &cron, keep) {
+                            Ok(()) => {
+                                app.backup_schedule = backup::read_schedule();
+                                app.push_log(format!("schedule keep set to {}", keep));
+                            }
+                            Err(e) => {
+                                app.push_log(format!("schedule error: {:#}", e));
+                                app.input = Some(input);
                             }
                         }
-                        Err(_) => {
-                            app.push_log("keep must be a whole number (0 = no pruning)");
-                            app.input = Some(input);
-                        }
                     }
-                }
+                    Err(_) => {
+                        app.push_log("keep must be a whole number (0 = no pruning)");
+                        app.input = Some(input);
+                    }
+                },
             }
         }
         KeyCode::Backspace => {
@@ -793,7 +785,9 @@ fn begin_backup_cron_edit(app: &mut App) {
         .unwrap_or_else(|| "0 3 * * *".to_string());
     app.input = Some(InputMode {
         key: "backup_cron".to_string(),
-        label: "Cron schedule (e.g. '0 3 * * *' = daily 3am, '0 */6 * * *' = every 6h). Enter to save.".to_string(),
+        label:
+            "Cron schedule (e.g. '0 3 * * *' = daily 3am, '0 */6 * * *' = every 6h). Enter to save."
+                .to_string(),
         value: current,
         action: InputAction::SetBackupCron,
     });
@@ -816,9 +810,7 @@ fn begin_backup_keep_edit(app: &mut App) {
 fn current_exe_path() -> String {
     std::env::current_exe()
         .unwrap_or_else(|_| {
-            std::path::PathBuf::from(
-                "/home/dune/dune-server/dune-ctl/target/release/dune-ctl",
-            )
+            std::path::PathBuf::from("/home/dune/dune-server/dune-ctl/target/release/dune-ctl")
         })
         .to_string_lossy()
         .into_owned()

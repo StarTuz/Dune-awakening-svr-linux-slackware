@@ -517,9 +517,7 @@ fn draw_diagnostics(f: &mut Frame, snap: Option<&HealthSnapshot>, area: Rect) {
         return;
     };
 
-    let lines = vec![
-        check_line("firewalld", &snap.diagnostics.firewall_backend),
-    ];
+    let lines = vec![check_line("firewalld", &snap.diagnostics.firewall_backend)];
     f.render_widget(panel("Diagnostics", lines), area);
 }
 
@@ -907,8 +905,7 @@ fn draw_backup_schedule_bar(f: &mut Frame, app: &App, area: Rect) {
         ]),
     };
     f.render_widget(
-        Paragraph::new(line)
-            .block(Block::default().borders(Borders::ALL).title("Schedule")),
+        Paragraph::new(line).block(Block::default().borders(Borders::ALL).title("Schedule")),
         area,
     );
 }
@@ -981,7 +978,11 @@ fn describe_cron(cron: &str) -> Option<String> {
 
 fn draw_backup_list(f: &mut Frame, app: &App, area: Rect) {
     let now = chrono::Local::now();
-    let loading_suffix = if app.backup_list_loading { " [loading]" } else { "" };
+    let loading_suffix = if app.backup_list_loading {
+        " [loading]"
+    } else {
+        ""
+    };
     let title = format!("Backups{}", loading_suffix);
 
     let rows: Vec<Row> = if app.backup_entries.is_empty() {
@@ -1005,6 +1006,7 @@ fn draw_backup_list(f: &mut Frame, app: &App, area: Rect) {
                 };
                 Row::new(vec![
                     Cell::from(entry.timestamp.clone()),
+                    Cell::from(entry.environment.clone()),
                     Cell::from(age),
                     Cell::from(db),
                     Cell::from(size),
@@ -1018,12 +1020,13 @@ fn draw_backup_list(f: &mut Frame, app: &App, area: Rect) {
         rows,
         [
             Constraint::Length(17),
+            Constraint::Length(6),
             Constraint::Length(10),
             Constraint::Length(5),
             Constraint::Length(10),
         ],
     )
-    .header(header_row(vec!["Timestamp", "Age", "DB", "Size"]))
+    .header(header_row(vec!["Timestamp", "ENV", "Age", "DB", "Size"]))
     .block(Block::default().borders(Borders::ALL).title(title));
     f.render_widget(table, area);
 }
@@ -1119,7 +1122,11 @@ fn draw_settings_table(f: &mut Frame, app: &App, area: Rect) {
         ],
     )
     .header(header)
-    .block(Block::default().borders(Borders::ALL).title("Managed Settings"));
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Managed Settings"),
+    );
 
     let mut state = TableState::default();
     if !app.settings.is_empty() {

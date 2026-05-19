@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Subcommand;
 use dune_ctl_core::{
-    backup, battlegroup,
+    backup, battlegroup, capsules,
     config::{Config, WorldProfile},
     diagnostics::CheckState,
     fls::FlsTokenState,
@@ -16,6 +16,11 @@ pub enum Command {
     Worlds {
         #[command(subcommand)]
         action: WorldsCommand,
+    },
+    /// Inventory and activate world capsules
+    Capsules {
+        #[command(subcommand)]
+        action: CapsulesCommand,
     },
     /// Show battlegroup status, map phases, FLS token, and RAM
     Status,
@@ -85,6 +90,117 @@ pub enum WorldsCommand {
     List,
     /// Create a per-world local UserSettings profile for the selected world
     InitSettings,
+}
+
+#[derive(Subcommand)]
+pub enum CapsulesCommand {
+    /// Print current capsule inventory and host/package isolation state
+    Inventory,
+    /// Render a capsule without applying it to Kubernetes
+    Create {
+        /// Capsule environment
+        #[arg(long, default_value = "live")]
+        env: String,
+        /// World title; prompts when omitted
+        #[arg(long)]
+        name: Option<String>,
+        /// Sietch name; prompts when omitted
+        #[arg(long)]
+        sietch_name: Option<String>,
+        /// Farm region; prompts when omitted
+        #[arg(long)]
+        region: Option<String>,
+        /// Self-hosting token
+        #[arg(long)]
+        token: Option<String>,
+        /// Read self-hosting token from a file
+        #[arg(long)]
+        token_file: Option<String>,
+        /// Package root containing server/scripts/setup
+        #[arg(long)]
+        package_root: Option<String>,
+        /// Battlegroup id; generated from token when omitted
+        #[arg(long)]
+        world_id: Option<String>,
+        /// Public host IP advertised to FLS
+        #[arg(long)]
+        host_ip: Option<String>,
+        /// Overwrite an existing capsule directory
+        #[arg(long)]
+        force: bool,
+    },
+    /// Package management for a capsule environment
+    Package {
+        #[command(subcommand)]
+        action: CapsulePackageCommand,
+    },
+    /// Import package images into k3s/containerd
+    Images {
+        #[command(subcommand)]
+        action: CapsuleImagesCommand,
+    },
+    /// Dry-run or apply a rendered capsule
+    Activate {
+        /// Capsule environment
+        #[arg(long, default_value = "live")]
+        env: String,
+        /// Capsule battlegroup id
+        #[arg(long)]
+        world_id: String,
+        /// Apply namespace, secrets, and BattleGroup
+        #[arg(long)]
+        apply: bool,
+        /// Allow apply while other battlegroups exist
+        #[arg(long)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CapsulePackageCommand {
+    /// Download a package with SteamCMD, then validate it
+    Install {
+        /// Capsule environment
+        #[arg(long, default_value = "live")]
+        env: String,
+        /// Steam app id
+        #[arg(long)]
+        app_id: Option<String>,
+        /// Install root
+        #[arg(long)]
+        package_root: Option<String>,
+        /// SteamCMD script path
+        #[arg(long)]
+        steamcmd: Option<String>,
+    },
+    /// Validate an installed package root
+    Validate {
+        /// Capsule environment
+        #[arg(long, default_value = "live")]
+        env: String,
+        /// Steam app id
+        #[arg(long)]
+        app_id: Option<String>,
+        /// Package root to validate
+        #[arg(long)]
+        package_root: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum CapsuleImagesCommand {
+    /// Import package images into k3s/containerd
+    Load {
+        /// Capsule environment
+        #[arg(long, default_value = "live")]
+        env: String,
+        /// Package root to import from
+        #[arg(long)]
+        package_root: Option<String>,
+        /// Steam app id
+        #[arg(long)]
+        app_id: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -188,6 +304,7 @@ pub enum SettingsCommand {
 pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
     match cmd {
         Command::Worlds { action } => cmd_worlds(action, cfg).await,
+        Command::Capsules { action } => cmd_capsules(action, cfg).await,
         Command::Status => cmd_status(cfg).await,
         Command::Preflight { strict } => cmd_preflight(cfg, strict).await,
         Command::Maps { action } => cmd_maps(action, cfg).await,
@@ -257,6 +374,13 @@ fn print_world_row(cfg: &Config, world: &WorldProfile) {
         },
         world.spec_path.display()
     );
+}
+
+fn capsule_option(args: &mut Vec<String>, flag: &str, value: Option<String>) {
+    if let Some(value) = value {
+        args.push(flag.to_string());
+        args.push(value);
+    }
 }
 
 fn world_settings_dir(battlegroup: &str) -> std::path::PathBuf {
@@ -432,6 +556,117 @@ async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
         }
     }
     println!("Local settings: {}", cfg.user_settings_dir().display());
+    Ok(())
+}
+
+async fn cmd_capsules(action: CapsulesCommand, cfg: &Config) -> Result<()> {
+    match action {
+        CapsulesCommand::Inventory => {
+            let text = capsules::inventory(cfg).await?;
+            print!("{}", text);
+        }
+        CapsulesCommand::Create {
+            env,
+            name,
+            sietch_name,
+            region,
+            token,
+            token_file,
+            package_root,
+            world_id,
+            host_ip,
+            force,
+        } => {
+            if token.is_some() && token_file.is_some() {
+                anyhow::bail!("use either --token or --token-file, not both");
+            }
+            let mut args = vec!["create".to_string(), "--env".to_string(), env];
+            capsule_option(&mut args, "--name", name);
+            capsule_option(&mut args, "--sietch-name", sietch_name);
+            capsule_option(&mut args, "--region", region);
+            capsule_option(&mut args, "--token", token);
+            capsule_option(&mut args, "--token-file", token_file);
+            capsule_option(&mut args, "--package-root", package_root);
+            capsule_option(&mut args, "--world-id", world_id);
+            capsule_option(&mut args, "--host-ip", host_ip);
+            if force {
+                args.push("--force".to_string());
+            }
+            capsules::run_stream(cfg, &args).await?;
+        }
+        CapsulesCommand::Package { action } => match action {
+            CapsulePackageCommand::Install {
+                env,
+                app_id,
+                package_root,
+                steamcmd,
+            } => {
+                let mut args = vec![
+                    "package".to_string(),
+                    "install".to_string(),
+                    "--env".to_string(),
+                    env,
+                ];
+                capsule_option(&mut args, "--app-id", app_id);
+                capsule_option(&mut args, "--package-root", package_root);
+                capsule_option(&mut args, "--steamcmd", steamcmd);
+                capsules::run_stream(cfg, &args).await?;
+            }
+            CapsulePackageCommand::Validate {
+                env,
+                app_id,
+                package_root,
+            } => {
+                let mut args = vec![
+                    "package".to_string(),
+                    "validate".to_string(),
+                    "--env".to_string(),
+                    env,
+                ];
+                capsule_option(&mut args, "--app-id", app_id);
+                capsule_option(&mut args, "--package-root", package_root);
+                capsules::run_stream(cfg, &args).await?;
+            }
+        },
+        CapsulesCommand::Images { action } => match action {
+            CapsuleImagesCommand::Load {
+                env,
+                package_root,
+                app_id,
+            } => {
+                let mut args = vec![
+                    "images".to_string(),
+                    "load".to_string(),
+                    "--env".to_string(),
+                    env,
+                ];
+                capsule_option(&mut args, "--package-root", package_root);
+                capsule_option(&mut args, "--app-id", app_id);
+                capsules::run_stream(cfg, &args).await?;
+            }
+        },
+        CapsulesCommand::Activate {
+            env,
+            world_id,
+            apply,
+            force,
+        } => {
+            let mut args = vec![
+                "activate".to_string(),
+                "--env".to_string(),
+                env,
+                "--world-id".to_string(),
+                world_id,
+            ];
+            if apply {
+                args.push("--apply".to_string());
+            }
+            if force {
+                args.push("--force".to_string());
+            }
+            capsules::run_stream(cfg, &args).await?;
+        }
+    }
     Ok(())
 }
 
@@ -812,22 +1047,33 @@ async fn cmd_backup(action: BackupCommand, cfg: &Config) -> Result<()> {
         BackupCommand::List => {
             let entries = backup::list(cfg).await?;
             if entries.is_empty() {
-                println!("No backups found in /srv/backups/dune/{}.", cfg.battlegroup);
+                println!(
+                    "No backups found in /srv/backups/dune/{}/{}.",
+                    cfg.backup_environment, cfg.battlegroup
+                );
                 return Ok(());
             }
-            println!("{:<20} {:<5} {:<10} Path", "Timestamp", "DB", "Size");
-            println!("{}", "-".repeat(80));
+            println!(
+                "{:<20} {:<6} {:<5} {:<10} Path",
+                "Timestamp", "ENV", "DB", "Size"
+            );
+            println!("{}", "-".repeat(88));
             for e in &entries {
                 println!(
-                    "{:<20} {:<5} {:<10} {}",
+                    "{:<20} {:<6} {:<5} {:<10} {}",
                     e.timestamp,
+                    e.environment,
                     if e.has_db { "yes" } else { "no" },
                     backup::format_size(e.size_bytes),
                     e.path.display()
                 );
             }
         }
-        BackupCommand::Run { skip_db, name, keep } => {
+        BackupCommand::Run {
+            skip_db,
+            name,
+            keep,
+        } => {
             println!("Starting backup for {}...", cfg.battlegroup);
             backup::run(cfg, skip_db, name.as_deref()).await?;
             if keep > 0 {
@@ -842,7 +1088,12 @@ async fn cmd_backup(action: BackupCommand, cfg: &Config) -> Result<()> {
                 }
             }
         }
-        BackupCommand::Schedule { show, remove, cron, keep } => {
+        BackupCommand::Schedule {
+            show,
+            remove,
+            cron,
+            keep,
+        } => {
             cmd_schedule(show, remove, &cron, keep, cfg)?;
         }
         BackupCommand::Restore { bundle, yes } => {
@@ -856,8 +1107,8 @@ async fn cmd_backup(action: BackupCommand, cfg: &Config) -> Result<()> {
                 std::process::exit(1);
             }
             println!(
-                "Restoring bundle '{}' for {}...",
-                bundle, cfg.battlegroup
+                "Restoring bundle '{}' for {} ({})...",
+                bundle, cfg.battlegroup, cfg.backup_environment
             );
             backup::restore(cfg, &bundle).await?;
             println!("Restore complete.");

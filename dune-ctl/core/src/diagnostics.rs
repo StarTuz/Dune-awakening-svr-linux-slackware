@@ -1,4 +1,3 @@
-
 #[derive(Debug, Clone)]
 pub struct DiagnosticsSnapshot {
     pub firewall_backend: Check,
@@ -61,8 +60,7 @@ async fn read_firewalld_backend() -> Check {
         },
         "nftables" => Check {
             state: CheckState::Warning,
-            message: "FirewallBackend=nftables; k3s/flannel conflict risk on this host"
-                .to_string(),
+            message: "FirewallBackend=nftables; k3s/flannel conflict risk on this host".to_string(),
         },
         other => Check {
             state: CheckState::Unknown,

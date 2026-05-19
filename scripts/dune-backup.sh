@@ -6,19 +6,21 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BATTLEGROUP_SCRIPT="$REPO_ROOT/server/scripts/battlegroup.sh"
 BATTLEGROUP_PREFIX="funcom-seabass-"
 BACKUP_ROOT="${BACKUP_ROOT:-/srv/backups/dune}"
+BACKUP_ENV="${BACKUP_ENV:-}"
 
 usage() {
     cat <<EOF
-Usage: $0 [--bg NAME] [--name BACKUP_NAME] [--skip-db]
+Usage: $0 [--bg NAME] [--env ptc|live] [--name BACKUP_NAME] [--skip-db]
 
 Creates a host-side Dune backup bundle under:
-  $BACKUP_ROOT/<battlegroup>/<timestamp>/
+  $BACKUP_ROOT/<environment>/<battlegroup>/<timestamp>/
 
 The bundle includes a Funcom DatabaseOperation dump, Kubernetes metadata,
 deployed UserSettings, local User*.ini defaults, diagnostics, and a manifest.
 
 Options:
   --bg NAME        Battlegroup name without funcom-seabass- prefix
+  --env ENV        Backup environment: ptc or live
   --name NAME      Database backup filename. Defaults to <bg>-<timestamp>.backup
   --skip-db        Collect metadata/settings only; do not create a DB dump
   -h, --help       Show this help
@@ -27,12 +29,17 @@ EOF
 
 bgname=""
 backup_name=""
+backup_env="$BACKUP_ENV"
 skip_db=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --bg)
             bgname="${2:-}"
+            shift 2
+            ;;
+        --env)
+            backup_env="${2:-}"
             shift 2
             ;;
         --name)
@@ -66,6 +73,56 @@ need_cmd sudo
 need_cmd kubectl
 need_cmd tar
 
+apply_database_operation() {
+    local op_name="$1"
+    local action="$2"
+    local backup="$3"
+
+    printf '%s\n' \
+        'apiVersion: igw.funcom.com/v1' \
+        'kind: DatabaseOperation' \
+        'metadata:' \
+        "  name: $op_name" \
+        "  namespace: $ns" \
+        'spec:' \
+        "  battleGroup: $bgname" \
+        "  action: $action" \
+        "  backup: $backup" \
+        | sudo kubectl apply -f -
+}
+
+wait_database_operation() {
+    local op_name="$1"
+    local action="$2"
+    local timeout="${3:-600}"
+    local elapsed=0
+    local interval=5
+
+    echo "Waiting for database $action operation $op_name..."
+    while [ "$elapsed" -lt "$timeout" ]; do
+        local phase
+        phase="$(sudo kubectl get databaseoperation "$op_name" -n "$ns" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+        case "$phase" in
+            Succeeded)
+                echo "Database $action succeeded."
+                return 0
+                ;;
+            Failed)
+                echo "ERROR: database $action operation $op_name failed." >&2
+                sudo kubectl describe databaseoperation "$op_name" -n "$ns" >&2 || true
+                return 1
+                ;;
+        esac
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+        echo "  Still waiting... (${elapsed}s / ${timeout}s, phase=${phase:-Pending})"
+    done
+
+    echo "ERROR: timed out waiting for database $action operation $op_name." >&2
+    sudo kubectl describe databaseoperation "$op_name" -n "$ns" >&2 || true
+    return 1
+}
+
 if [ -z "$bgname" ]; then
     mapfile -t namespaces < <(sudo kubectl get ns --no-headers -o custom-columns=NAME:.metadata.name | grep "^$BATTLEGROUP_PREFIX" || true)
     if [ "${#namespaces[@]}" -eq 0 ]; then
@@ -91,12 +148,29 @@ else
     ns="$BATTLEGROUP_PREFIX$bgname"
 fi
 
+if [ -z "$backup_env" ]; then
+    if [ "$bgname" = "sh-db3533a2d5a25fb-xyyxbx" ]; then
+        backup_env="ptc"
+    else
+        backup_env="live"
+    fi
+fi
+
+case "$backup_env" in
+    ptc|live)
+        ;;
+    *)
+        echo "ERROR: --env must be 'ptc' or 'live' (got '$backup_env')" >&2
+        exit 1
+        ;;
+esac
+
 timestamp="$(date -u +%Y%m%d-%H%M%S)"
 if [ -z "$backup_name" ]; then
     backup_name="$bgname-$timestamp.backup"
 fi
 
-dest="$BACKUP_ROOT/$bgname/$timestamp"
+dest="$BACKUP_ROOT/$backup_env/$bgname/$timestamp"
 database_dest="$dest/database"
 k8s_dest="$dest/k8s"
 settings_dest="$dest/user-settings"
@@ -106,6 +180,7 @@ manifest="$dest/MANIFEST.txt"
 {
     echo "Dune backup manifest"
     echo "created_utc=$timestamp"
+    echo "environment=$backup_env"
     echo "battlegroup=$bgname"
     echo "namespace=$ns"
     echo "backup_name=$backup_name"
@@ -117,21 +192,20 @@ echo "Backup bundle: $dest"
 
 if [ "$skip_db" -eq 0 ]; then
     echo "Creating database dump via Funcom DatabaseOperation..."
-    "$BATTLEGROUP_SCRIPT" backup "$backup_name"
+    op_name="$bgname-dump-$timestamp"
+    apply_database_operation "$op_name" "dump" "$backup_name"
+    wait_database_operation "$op_name" "dump"
 
     src_dir="/funcom/artifacts/database-dumps/$bgname"
     src_backup="$src_dir/$backup_name"
-    if sudo test ! -f "$src_backup"; then
+    if [ ! -f "$src_backup" ]; then
         echo "ERROR: expected database dump not found: $src_backup" >&2
         exit 1
     fi
 
     echo "Copying database dump into backup bundle..."
-    sudo cp "$src_backup" "$database_dest/"
-    if sudo test -f "$src_backup.yaml"; then
-        sudo cp "$src_backup.yaml" "$database_dest/"
-    fi
-    sudo chown -R "$(id -u):$(id -g)" "$database_dest"
+    cp "$src_backup" "$database_dest/"
+    sudo kubectl get battlegroup "$bgname" -n "$ns" -o yaml > "$database_dest/$backup_name.yaml" 2>/dev/null || true
 else
     echo "Skipping database dump by request."
 fi

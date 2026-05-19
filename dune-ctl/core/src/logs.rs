@@ -57,7 +57,15 @@ pub async fn stream(cfg: &Config, target: &str, tail_lines: usize) -> Result<()>
     let mut child = tokio::process::Command::new("sudo")
         .arg("-n")
         .arg("kubectl")
-        .args(["logs", "-n", &cfg.namespace, "-f", "--tail", &tail_str, &pod])
+        .args([
+            "logs",
+            "-n",
+            &cfg.namespace,
+            "-f",
+            "--tail",
+            &tail_str,
+            &pod,
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()

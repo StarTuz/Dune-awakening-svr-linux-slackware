@@ -463,10 +463,10 @@ pub async fn diff(cfg: &Config) -> Result<String> {
         } else {
             let mut changed = 0;
             for def in CATALOG.iter().filter(|def| def.file == file) {
-                let local_value = read_value(&local, def)
-                    .unwrap_or_else(|| "<missing>".to_string());
-                let remote_value = read_value(&remote, def)
-                    .unwrap_or_else(|| "<missing>".to_string());
+                let local_value =
+                    read_value(&local, def).unwrap_or_else(|| "<missing>".to_string());
+                let remote_value =
+                    read_value(&remote, def).unwrap_or_else(|| "<missing>".to_string());
                 if local_value != remote_value {
                     changed += 1;
                     out.push_str(&format!(
@@ -517,9 +517,7 @@ pub async fn drift(cfg: &Config) -> Result<SettingsDrift> {
             items.push(SettingDrift {
                 def,
                 local: read_value(&local, &def),
-                deployed: deployed
-                    .as_deref()
-                    .and_then(|text| read_value(text, &def)),
+                deployed: deployed.as_deref().and_then(|text| read_value(text, &def)),
             });
         }
     }

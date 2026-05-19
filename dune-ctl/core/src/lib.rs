@@ -1,5 +1,6 @@
 pub mod backup;
 pub mod battlegroup;
+pub mod capsules;
 pub mod config;
 pub mod diagnostics;
 pub mod fls;

@@ -23,7 +23,8 @@ Every command resolves a world (battlegroup) in this order:
 3. Auto-selects the only world found in `~/.dune/`
 
 The active world is shown in every command's output footer and in the TUI header.
-Use `dune-ctl worlds list` to see all known worlds.
+Use `dune-ctl worlds list` to see all known worlds, including capsule-backed
+worlds under `~/.dune/capsules/<env>/<bg>/capsule.env`.
 
 ---
 
@@ -125,6 +126,21 @@ dune-ctl worlds init-settings # create per-world UserSettings profile
 `init-settings` copies the shared `server/scripts/setup/config/User*.ini`
 templates into `~/.dune/worlds/<battlegroup>/UserSettings/`. After this, all
 `settings` commands read/write that profile instead of the shared files.
+
+### `dune-ctl capsules`
+
+Capsule inventory and activation front-end. This wraps the `scripts/world-capsules.sh`
+workflow and is the preferred operator entry point for capsule creation and
+deployment.
+
+```sh
+dune-ctl capsules inventory
+dune-ctl capsules create --env live
+dune-ctl capsules package validate --env live
+dune-ctl capsules package install --env live
+dune-ctl capsules images load --env live
+dune-ctl capsules activate --env live --world-id sh-db3533a2d5a25fb-silakw
+```
 
 ### `dune-ctl maps`
 
@@ -316,8 +332,10 @@ All stdout/stderr is streamed live — you see each step as it runs. The DB dump
 step takes the longest (typically 1–3 minutes while the operator creates the dump
 pod and waits for it to complete).
 
-Bundles land in `/srv/backups/dune/<battlegroup>/<timestamp>/` on the 151 GB
-backup volume (`dune-vg/backups`, ~149 GB free).
+Bundles land in `/srv/backups/dune/<environment>/<battlegroup>/<timestamp>/`
+on the 151 GB backup volume (`dune-vg/backups`, ~149 GB free). `ptc` and
+`live` are restore trust boundaries; `dune-ctl backup restore` refuses bundles
+whose manifest environment does not match the current world.
 
 ### Commands
 
@@ -327,7 +345,7 @@ dune-ctl backup run                           # full backup (DB + metadata)
 dune-ctl backup run --skip-db                 # metadata/settings only (fast, ~5s)
 dune-ctl backup run --keep 14                 # run + prune to 14 most recent
 dune-ctl backup restore --yes 20260517-021045 # restore by timestamp
-dune-ctl backup restore --yes /srv/backups/dune/<bg>/20260517-021045  # by path
+dune-ctl backup restore --yes /srv/backups/dune/<env>/<bg>/20260517-021045  # by path
 dune-ctl backup schedule                      # install nightly cron at 3am, keep 14
 dune-ctl backup schedule --cron "0 2 * * *" --keep 7   # custom schedule
 dune-ctl backup schedule --show               # print installed schedule

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 const BATTLEGROUP_PREFIX: &str = "funcom-seabass-";
 
@@ -7,6 +7,7 @@ pub struct WorldProfile {
     pub battlegroup: String,
     pub namespace: String,
     pub title: Option<String>,
+    pub backup_environment: String,
     pub spec_path: PathBuf,
 }
 
@@ -17,6 +18,7 @@ pub struct Config {
     pub battlegroup: String,
     pub namespace: String,
     pub title: Option<String>,
+    pub backup_environment: String,
     pub world_spec: Option<PathBuf>,
     pub explicit_target: bool,
     pub scripts_dir: PathBuf,
@@ -33,33 +35,15 @@ impl Config {
     }
 
     pub fn discover_worlds() -> anyhow::Result<Vec<WorldProfile>> {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/dune".into());
-        let dune_dir = PathBuf::from(&home).join(".dune");
-        if !dune_dir.exists() {
-            return Ok(Vec::new());
+        let mut worlds = HashMap::<String, (u8, WorldProfile)>::new();
+        for world in discover_yaml_worlds()? {
+            insert_world(&mut worlds, world, 0);
+        }
+        for world in discover_capsule_worlds()? {
+            insert_world(&mut worlds, world, 1);
         }
 
-        let mut worlds = Vec::new();
-        for entry in std::fs::read_dir(&dune_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            let Some(fname) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if !is_world_spec_filename(fname) {
-                continue;
-            }
-
-            let text = std::fs::read_to_string(&path).unwrap_or_default();
-            let bg = fname.trim_end_matches(".yaml").to_string();
-            worlds.push(WorldProfile {
-                namespace: format!("{}{}", BATTLEGROUP_PREFIX, bg),
-                battlegroup: bg,
-                title: parse_title(&text),
-                spec_path: path,
-            });
-        }
-
+        let mut worlds: Vec<WorldProfile> = worlds.into_values().map(|(_, world)| world).collect();
         worlds.sort_by(|a, b| a.battlegroup.cmp(&b.battlegroup));
         Ok(worlds)
     }
@@ -82,6 +66,7 @@ impl Config {
             namespace: selected.namespace.clone(),
             battlegroup: selected.battlegroup.clone(),
             title: selected.title.clone(),
+            backup_environment: selected.backup_environment.clone(),
             world_spec: Some(selected.spec_path.clone()),
             explicit_target: target.is_some(),
             scripts_dir: PathBuf::from(&home).join("dune-server/scripts"),
@@ -94,6 +79,7 @@ impl Config {
             namespace: format!("{}{}", BATTLEGROUP_PREFIX, bg),
             battlegroup: bg,
             title: Some("Slackware-Arrakis".to_string()),
+            backup_environment: "ptc".to_string(),
             world_spec: None,
             explicit_target: false,
             scripts_dir: PathBuf::from("/home/dune/dune-server/scripts"),
@@ -174,6 +160,107 @@ fn is_world_spec_filename(fname: &str) -> bool {
         && !fname.contains("-dump-")
 }
 
+fn discover_yaml_worlds() -> anyhow::Result<Vec<WorldProfile>> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/dune".into());
+    let dune_dir = PathBuf::from(&home).join(".dune");
+    if !dune_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut worlds = Vec::new();
+    for entry in std::fs::read_dir(&dune_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let Some(fname) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !is_world_spec_filename(fname) {
+            continue;
+        }
+
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let bg = fname.trim_end_matches(".yaml").to_string();
+        worlds.push(WorldProfile {
+            namespace: format!("{}{}", BATTLEGROUP_PREFIX, bg),
+            title: parse_title(&text),
+            backup_environment: parse_backup_environment(&text)
+                .unwrap_or_else(|| default_backup_environment(&bg).to_string()),
+            battlegroup: bg,
+            spec_path: path,
+        });
+    }
+    Ok(worlds)
+}
+
+fn discover_capsule_worlds() -> anyhow::Result<Vec<WorldProfile>> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/dune".into());
+    let capsule_root = PathBuf::from(&home).join(".dune").join("capsules");
+    if !capsule_root.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut worlds = Vec::new();
+    for env_entry in std::fs::read_dir(&capsule_root)? {
+        let env_entry = env_entry?;
+        let env_path = env_entry.path();
+        if !env_path.is_dir() {
+            continue;
+        }
+        for world_entry in std::fs::read_dir(&env_path)? {
+            let world_entry = world_entry?;
+            let world_path = world_entry.path();
+            if !world_path.is_dir() {
+                continue;
+            }
+            let capsule_env = world_path.join("capsule.env");
+            if !capsule_env.exists() {
+                continue;
+            }
+            let text = std::fs::read_to_string(&capsule_env).unwrap_or_default();
+            let bg = parse_capsule_value(&text, "world_id")
+                .or_else(|| {
+                    world_path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            if bg.is_empty() {
+                continue;
+            }
+            let namespace = parse_capsule_value(&text, "namespace")
+                .unwrap_or_else(|| format!("{}{}", BATTLEGROUP_PREFIX, bg));
+            worlds.push(WorldProfile {
+                namespace,
+                title: parse_capsule_value(&text, "world_title")
+                    .or_else(|| parse_capsule_value(&text, "title")),
+                backup_environment: parse_capsule_value(&text, "environment")
+                    .unwrap_or_else(|| default_backup_environment(&bg).to_string()),
+                battlegroup: bg,
+                spec_path: capsule_env,
+            });
+        }
+    }
+    Ok(worlds)
+}
+
+fn insert_world(
+    worlds: &mut HashMap<String, (u8, WorldProfile)>,
+    world: WorldProfile,
+    priority: u8,
+) {
+    match worlds.get(&world.battlegroup) {
+        Some((existing_priority, _)) if *existing_priority > priority => {}
+        Some((existing_priority, existing_world))
+            if *existing_priority == priority
+                && existing_world.spec_path.to_string_lossy()
+                    <= world.spec_path.to_string_lossy() => {}
+        _ => {
+            worlds.insert(world.battlegroup.clone(), (priority, world));
+        }
+    }
+}
+
 fn parse_title(text: &str) -> Option<String> {
     text.lines()
         .find_map(|line| line.trim().strip_prefix("title:"))
@@ -182,7 +269,93 @@ fn parse_title(text: &str) -> Option<String> {
         .map(|value| value.trim_matches('"').to_string())
 }
 
+fn parse_backup_environment(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        for key in [
+            "backup_environment:",
+            "backupEnvironment:",
+            "dune-ctl.algieba.org/backup-environment:",
+        ] {
+            if let Some(value) = trimmed.strip_prefix(key) {
+                let env = value.trim().trim_matches('"').to_ascii_lowercase();
+                if env == "ptc" || env == "live" {
+                    return Some(env);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn parse_capsule_value(text: &str, key: &str) -> Option<String> {
+    let prefix = format!("{}=", key);
+    text.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix(&prefix)
+            .map(str::trim)
+            .map(|value| value.trim_matches('"').to_string())
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn default_backup_environment(battlegroup: &str) -> &'static str {
+    if battlegroup == "sh-db3533a2d5a25fb-xyyxbx" {
+        "ptc"
+    } else {
+        "live"
+    }
+}
+
 fn dune_home() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/home/dune".into());
     PathBuf::from(home).join(".dune")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_backup_environment_variants() {
+        assert_eq!(
+            parse_backup_environment("backup_environment: ptc").as_deref(),
+            Some("ptc")
+        );
+        assert_eq!(
+            parse_backup_environment("backupEnvironment: \"live\"").as_deref(),
+            Some("live")
+        );
+        assert_eq!(
+            parse_backup_environment("dune-ctl.algieba.org/backup-environment: PTC").as_deref(),
+            Some("ptc")
+        );
+    }
+
+    #[test]
+    fn ignores_invalid_backup_environment() {
+        assert_eq!(parse_backup_environment("backup_environment: dev"), None);
+    }
+
+    #[test]
+    fn parses_capsule_values() {
+        let text = "environment=live\nworld_title=Ixware\nnamespace=funcom-seabass-ixware\n";
+        assert_eq!(
+            parse_capsule_value(text, "environment").as_deref(),
+            Some("live")
+        );
+        assert_eq!(
+            parse_capsule_value(text, "world_title").as_deref(),
+            Some("Ixware")
+        );
+    }
+
+    #[test]
+    fn defaults_known_ptc_world_to_ptc() {
+        assert_eq!(
+            default_backup_environment("sh-db3533a2d5a25fb-xyyxbx"),
+            "ptc"
+        );
+        assert_eq!(default_backup_environment("official-bg"), "live");
+    }
 }
