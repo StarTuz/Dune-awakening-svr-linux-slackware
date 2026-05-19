@@ -870,20 +870,31 @@ fn draw_backups_view(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_backup_schedule_bar(f: &mut Frame, app: &App, area: Rect) {
     let line = match &app.backup_schedule {
-        Some(info) => Line::from(vec![
-            Span::styled("Cron: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(info.cron.clone(), Style::default().fg(Color::Green)),
-            Span::raw("   "),
-            Span::styled("Keep: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{} bundles", info.keep),
-                Style::default().fg(Color::Green),
-            ),
-            Span::styled(
-                "   [e] edit cron  [K] edit keep  [X] remove",
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]),
+        Some(info) => {
+            let mut spans = vec![
+                Span::styled("Cron: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(info.cron.clone(), Style::default().fg(Color::Green)),
+            ];
+            if let Some(desc) = describe_cron(&info.cron) {
+                spans.push(Span::styled(
+                    format!("  ({})", desc),
+                    Style::default().fg(Color::Cyan),
+                ));
+            }
+            spans.extend([
+                Span::raw("   "),
+                Span::styled("Keep: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{} bundles", info.keep),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::styled(
+                    "   [e] edit cron  [K] edit keep  [X] remove",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+            Line::from(spans)
+        }
         None => Line::from(vec![
             Span::styled(
                 "No schedule installed.  ",
@@ -900,6 +911,72 @@ fn draw_backup_schedule_bar(f: &mut Frame, app: &App, area: Rect) {
             .block(Block::default().borders(Borders::ALL).title("Schedule")),
         area,
     );
+}
+
+fn describe_cron(cron: &str) -> Option<String> {
+    let p: Vec<&str> = cron.split_whitespace().collect();
+    if p.len() != 5 {
+        return None;
+    }
+    let (min, hour, dom, month, dow) = (p[0], p[1], p[2], p[3], p[4]);
+    if month != "*" {
+        return None;
+    }
+
+    // Every N minutes: */N * * * *
+    if let Some(n) = min.strip_prefix("*/").and_then(|s| s.parse::<u32>().ok()) {
+        if hour == "*" && dom == "*" && dow == "*" {
+            return Some(format!("every {}m", n));
+        }
+    }
+
+    // Every N hours: 0 */N * * *
+    if min == "0" {
+        if let Some(n) = hour.strip_prefix("*/").and_then(|s| s.parse::<u32>().ok()) {
+            if dom == "*" && dow == "*" {
+                return Some(format!("every {}h", n));
+            }
+        }
+    }
+
+    // Fixed time patterns
+    let m: u8 = min.parse().ok()?;
+    let h: u8 = hour.parse().ok()?;
+    let time = format!("{:02}:{:02}", h, m);
+
+    // Daily: M H * * *
+    if dom == "*" && dow == "*" {
+        return Some(format!("daily at {}", time));
+    }
+
+    // Weekly: M H * * D
+    if dom == "*" {
+        let day = match dow {
+            "0" | "7" => "Sun",
+            "1" => "Mon",
+            "2" => "Tue",
+            "3" => "Wed",
+            "4" => "Thu",
+            "5" => "Fri",
+            "6" => "Sat",
+            _ => return None,
+        };
+        return Some(format!("{} at {}", day, time));
+    }
+
+    // Monthly: M H D * *
+    if dow == "*" {
+        let d: u8 = dom.parse().ok()?;
+        let sfx = match d {
+            1 | 21 | 31 => "st",
+            2 | 22 => "nd",
+            3 | 23 => "rd",
+            _ => "th",
+        };
+        return Some(format!("{}{}  of month at {}", d, sfx, time));
+    }
+
+    None
 }
 
 fn draw_backup_list(f: &mut Frame, app: &App, area: Rect) {
