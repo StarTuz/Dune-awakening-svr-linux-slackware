@@ -52,12 +52,12 @@ sudo kubectl get battlegroup -A -o wide
 sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
 
 # dune-ctl world targeting
-~/dune-server/dune-ctl/target/debug/dune-ctl worlds list
-~/dune-server/dune-ctl/target/debug/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx status
-~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis preflight
-~/dune-server/dune-ctl/target/debug/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx worlds init-settings
-~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis sietches list
-~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis settings status
+~/dune-server/dune-ctl/target/release/dune-ctl worlds list
+~/dune-server/dune-ctl/target/release/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx status
+~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis preflight
+~/dune-server/dune-ctl/target/release/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx worlds init-settings
+~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis sietches list
+~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis settings status
 
 # Restart/update
 ~/dune-server/server/scripts/battlegroup.sh restart
@@ -71,11 +71,11 @@ sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db353
 ~/dune-server/scripts/map-toggle.sh list
 ~/dune-server/scripts/map-toggle.sh start DeepDesert_1
 ~/dune-server/scripts/map-toggle.sh stop DeepDesert_1
-~/dune-server/dune-ctl/target/debug/dune-ctl maps start SH_Arrakeen
-~/dune-server/dune-ctl/target/debug/dune-ctl maps stop SH_Arrakeen
-~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis maps list
-~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis maps start DeepDesert_1
-~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis maps stop DeepDesert_1
+~/dune-server/dune-ctl/target/release/dune-ctl maps start SH_Arrakeen
+~/dune-server/dune-ctl/target/release/dune-ctl maps stop SH_Arrakeen
+~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis maps list
+~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis maps start DeepDesert_1
+~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis maps stop DeepDesert_1
 
 # Firewall sanity
 grep -n '^FirewallBackend' /etc/firewalld/firewalld.conf
@@ -89,8 +89,13 @@ swapon --show
 sudo ~/dune-server/scripts/resource-snapshot.sh known-good-YYYYMMDD-resources
 
 # Backups
-~/dune-server/scripts/dune-backup.sh
-sudo ~/dune-server/scripts/system-snapshot.sh known-good-YYYYMMDD
+dune-ctl backup list                          # list bundles with age/size
+dune-ctl backup run                           # full backup (DB + metadata)
+dune-ctl backup run --skip-db                 # metadata only (fast)
+dune-ctl backup schedule                      # install/view nightly cron (3am, keep 14)
+dune-ctl backup schedule --show               # view installed schedule
+dune-ctl backup restore --yes <timestamp>     # restore a bundle (stop BG first)
+sudo ~/dune-server/scripts/system-snapshot.sh known-good-YYYYMMDD  # full btrfs snapshot
 ```
 
 ## Networking
@@ -109,7 +114,7 @@ By default settings use Funcom's shared local defaults in
 per-world settings profile:
 
 ```sh
-~/dune-server/dune-ctl/target/debug/dune-ctl --world <bg> worlds init-settings
+~/dune-server/dune-ctl/target/release/dune-ctl --world <bg> worlds init-settings
 ```
 
 After that, `settings list/set/apply` for that world uses
@@ -138,7 +143,7 @@ drift exists unless you pass `--force`.
 Current `Slackware-Arrakis` profile hygiene:
 
 ```sh
-~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis settings status
+~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis settings status
 ```
 
 The selected world currently uses:
@@ -157,7 +162,7 @@ the live deployed settings before further edits.
 Use `--world Slackware-Arrakis` or `--world sh-db3533a2d5a25fb-xyyxbx` for
 explicit targeting. The TUI is the default when no subcommand is provided.
 Examples below use `dune-ctl`; replace that with
-`~/dune-server/dune-ctl/target/debug/dune-ctl` if it is not in `PATH`.
+`~/dune-server/dune-ctl/target/release/dune-ctl` if it is not in `PATH`.
 
 ```sh
 # World and health
@@ -184,16 +189,35 @@ dune-ctl --world Slackware-Arrakis settings list
 dune-ctl --world Slackware-Arrakis settings status
 dune-ctl --world Slackware-Arrakis settings pull
 dune-ctl --world Slackware-Arrakis settings set sietch_name "Arrakis-SlackwareLinux"
+dune-ctl --world Slackware-Arrakis settings set admin_password "secret"
 dune-ctl --world Slackware-Arrakis settings apply
 dune-ctl --world Slackware-Arrakis settings apply-restart
+
+# Logs
+dune-ctl logs Survival_1              # last 100 lines from game server pod
+dune-ctl logs gateway -f              # stream gateway logs until Ctrl-C
+dune-ctl logs postgres --tail 50      # last 50 postgres lines
+
+# Backups
+dune-ctl backup list
+dune-ctl backup run
+dune-ctl backup run --skip-db         # fast metadata-only bundle
+dune-ctl backup run --keep 14         # run + prune to 14 most recent
+dune-ctl backup schedule              # install nightly cron at 3am, keep 14
+dune-ctl backup schedule --show       # view installed schedule
+dune-ctl backup restore --yes <timestamp>   # restore (stop battlegroup first)
+
+# Players
+dune-ctl players                      # table of online players
 
 # Update/security helpers
 dune-ctl --world Slackware-Arrakis gateway-patch
 ~/dune-server/scripts/update.sh --start-after
 ~/dune-server/scripts/security-audit.sh
-~/dune-server/scripts/dune-backup.sh
 sudo ~/dune-server/scripts/resource-snapshot.sh known-good-YYYYMMDD-resources
 ```
+
+Full CLI reference: `dune-ctl/OPERATIONS.md`
 
 LAN clients behind the Frontier router need an OUTPUT DNAT rule because the
 router does not provide NAT hairpin:

@@ -26,7 +26,25 @@ scripts, but the database contains character/world/farm state.
 
 ## Backup
 
-Use the host wrapper:
+Preferred interface — use `dune-ctl backup`:
+
+```sh
+dune-ctl backup list                    # list bundles, newest first (timestamp/age/size)
+dune-ctl backup run                     # full backup: DB dump + k8s metadata + User*.ini
+dune-ctl backup run --skip-db           # metadata-only (fast, ~5 seconds)
+dune-ctl backup run --keep 14           # run + prune to 14 most recent
+dune-ctl backup schedule                # install nightly cron at 3am, keep 14
+dune-ctl backup schedule --show         # view installed schedule
+dune-ctl backup schedule --remove       # remove scheduled job
+```
+
+The TUI Backups tab (`6`) shows the bundle list with live age/size and lets you
+trigger a run with `r` (confirmation modal + streaming output pane).
+
+The nightly schedule is installed in the `dune` user's crontab with a
+`# dune-ctl-backup` marker so subsequent `schedule` calls are idempotent.
+
+Underlying host wrapper (called by `dune-ctl backup run`):
 
 ```sh
 ~/dune-server/scripts/dune-backup.sh
@@ -96,32 +114,44 @@ Verified on 2026-05-15:
 
 ## Restore
 
-Restore is intentionally more manual than backup.
+Restore **overwrites the live database**. Always stop the battlegroup first.
 
-The existing destructive import path is:
+### Preferred: dune-ctl backup restore
 
 ```sh
-~/dune-server/server/scripts/battlegroup.sh import <backup-name>
+# 1. Check what's available
+dune-ctl backup list
+
+# 2. Stop the battlegroup
+dune-ctl battlegroup stop
+
+# 3. Restore (--yes required to prevent accidental invocation)
+dune-ctl backup restore --yes <timestamp>
+# or by full path:
+dune-ctl backup restore --yes /srv/backups/dune/<battlegroup>/<timestamp>
+
+# 4. Start and re-patch
+dune-ctl battlegroup start
+dune-ctl gateway-patch
+dune-ctl status
 ```
 
-That command:
+`dune-ctl backup restore` stages the `.backup` file from the bundle into
+`/funcom/artifacts/database-dumps/<battlegroup>/` then calls
+`battlegroup.sh import`, which creates a `DatabaseOperation` with
+`spec.action: import` and waits for the operator to report success.
 
-1. Confirms interactively.
-2. Finds the server PVC.
-3. Stages the selected dump into `Saved/DatabaseDumps`.
-4. Creates a `DatabaseOperation` with `spec.action: import`.
-5. Waits for the operator to report success or failure.
+### Manual restore (fallback)
 
-Recommended restore procedure:
+If `dune-ctl` is unavailable, the underlying steps are:
 
-1. Confirm the backup directory and inspect `MANIFEST.txt`.
-2. Stop the battlegroup:
+1. Stop the battlegroup:
 
    ```sh
    ~/dune-server/server/scripts/battlegroup.sh stop
    ```
 
-3. Copy the chosen backup file back into Funcom's staging path if needed:
+2. Stage the dump file:
 
    ```sh
    sudo mkdir -p /funcom/artifacts/database-dumps/<battlegroup>
@@ -129,28 +159,18 @@ Recommended restore procedure:
      /funcom/artifacts/database-dumps/<battlegroup>/
    ```
 
-4. Run the import:
+3. Run the import:
 
    ```sh
    ~/dune-server/server/scripts/battlegroup.sh import <backup>.backup
    ```
 
-5. Start the battlegroup:
+4. Start and re-patch:
 
    ```sh
    ~/dune-server/server/scripts/battlegroup.sh start
    ~/dune-server/scripts/gateway-patch.sh
-   ```
-
-   If you are resuming a completed update rather than doing a manual restore,
-   `~/dune-server/scripts/update.sh --post-update-only --start-after` now wraps
-   the same DB check, battlegroup start, and gateway patch sequence.
-
-6. Verify with:
-
-   ```sh
    dune-ctl status
-   dune-ctl diagnostics
    ```
 
 ## What Must Be Backed Up
@@ -191,6 +211,13 @@ handled by the database operator on this single-node local-path setup.
   path, object storage, or a PVC in this package.
 - Whether scheduled `DatabaseBackupSchedule` is worth enabling for this
   single-node host once logical dumps are proven.
-- Off-host replication target: NAS via `rsync`, cloud via `rclone`, or both.
+- Off-host replication target: NAS via `rsync`, cloud via `rclone`, or both
+  (currently backups are local-only on `dune-vg/backups`).
 - Restore drill cadence. A backup should not be considered proven until an
   import has been tested on a disposable battlegroup or fresh cluster.
+
+## Scheduling (resolved)
+
+Nightly backups are scheduled via `dune-ctl backup schedule`. The entry lives
+in the `dune` user's crontab and runs at 03:00, keeping the 14 most recent
+bundles. Check with `dune-ctl backup schedule --show`.

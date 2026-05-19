@@ -1,6 +1,6 @@
 # Dune Server Setup — Status
 
-Last updated: 2026-05-15 — Deep Desert live-state captured; resource snapshot taken; stale nft firewalld table removed
+Last updated: 2026-05-18 — dune-ctl phases 1–4 complete (logs, backup/restore, admin settings, players); backup schedule installed; TUI tabs 5–6 live
 
 ## Current state ✅
 
@@ -303,7 +303,7 @@ Both `scripts/map-toggle.sh` and `dune-ctl/core/src/maps.rs` were updated so `st
 - [ ] Confirm motherboard swap outcome (64 GB recognised?) — reboot and verify with `free -h`
 - [ ] After board swap: raise Overmap request back to its natural limit (remove 200 Mi swap patch via `experimental_swap.sh`)
 - [x] Add and verify Dune backup/restore runbook and host backup wrapper — full DB backup succeeded 2026-05-15; see `BACKUP-RESTORE.md` and `scripts/dune-backup.sh`
-- [ ] Schedule Dune backup jobs writing to `/srv/backups/dune/`
+- [x] Schedule Dune backup jobs writing to `/srv/backups/dune/` — `dune-ctl backup schedule` installs nightly cron at 03:00, keeps 14
 - [ ] Set up Conan backup jobs writing to `/srv/backups/conan/`
 - [ ] Off-server backup strategy (rsync to NAS / rclone to cloud — TBD)
 - [ ] Create `settings.conf` (`printf '\n\n\n47.145.51.160\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
@@ -313,6 +313,10 @@ Both `scripts/map-toggle.sh` and `dune-ctl/core/src/maps.rs` were updated so `st
   settings drift guard, per-world settings profile, and TUI settings polish are
   in place
 - [x] dune-ctl combined preflight command
+- [x] dune-ctl log streaming — `dune-ctl logs <target> [-f]`; TUI tab 5
+- [x] dune-ctl backup/restore — `dune-ctl backup list|run|restore`; TUI tab 6
+- [x] dune-ctl admin settings — `admin_password`, `allowed_gm_commands` in catalog
+- [x] dune-ctl players online — `dune-ctl players`; count in Dashboard header
 - [ ] Future dune-ctl work — web UI and multi-Sietch research remain
   optional/future work
 
