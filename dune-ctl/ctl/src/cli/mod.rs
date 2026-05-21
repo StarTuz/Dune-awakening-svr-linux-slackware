@@ -129,6 +129,24 @@ pub enum CapsulesCommand {
         #[arg(long)]
         force: bool,
     },
+    /// Refresh an existing capsule from its package root
+    Refresh {
+        /// Capsule environment
+        #[arg(long, default_value = "live")]
+        env: String,
+        /// Capsule battlegroup id
+        #[arg(long)]
+        world_id: String,
+        /// Package root containing server/scripts/setup
+        #[arg(long)]
+        package_root: Option<String>,
+        /// Steam app id
+        #[arg(long)]
+        app_id: Option<String>,
+        /// Allow refresh to render an older image tag
+        #[arg(long)]
+        allow_downgrade: bool,
+    },
     /// Package management for a capsule environment
     Package {
         #[command(subcommand)]
@@ -594,6 +612,27 @@ async fn cmd_capsules(action: CapsulesCommand, cfg: &Config) -> Result<()> {
             }
             capsules::run_stream(cfg, &args).await?;
         }
+        CapsulesCommand::Refresh {
+            env,
+            world_id,
+            package_root,
+            app_id,
+            allow_downgrade,
+        } => {
+            let mut args = vec![
+                "refresh".to_string(),
+                "--env".to_string(),
+                env,
+                "--world-id".to_string(),
+                world_id,
+            ];
+            capsule_option(&mut args, "--package-root", package_root);
+            capsule_option(&mut args, "--app-id", app_id);
+            if allow_downgrade {
+                args.push("--allow-downgrade".to_string());
+            }
+            capsules::run_stream(cfg, &args).await?;
+        }
         CapsulesCommand::Package { action } => match action {
             CapsulePackageCommand::Install {
                 env,
@@ -1001,8 +1040,22 @@ async fn cmd_maps(action: MapsCommand, cfg: &Config) -> Result<()> {
 
 async fn cmd_update(cfg: &Config) -> Result<()> {
     println!("Running update pipeline...");
-    let out = update::run(cfg).await?;
-    print!("{}", out);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let cfg = cfg.clone();
+    let task = tokio::spawn(async move {
+        update::run_streamed(&cfg, update::UpdateOptions { start_after: true }, tx).await
+    });
+
+    while !task.is_finished() {
+        while let Ok(line) = rx.try_recv() {
+            println!("{}", line);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    while let Ok(line) = rx.try_recv() {
+        println!("{}", line);
+    }
+    task.await??;
     Ok(())
 }
 

@@ -121,6 +121,17 @@ impl Config {
             .join("UserSettings")
     }
 
+    pub fn capsule_dir(&self) -> PathBuf {
+        dune_home()
+            .join("capsules")
+            .join(&self.backup_environment)
+            .join(&self.battlegroup)
+    }
+
+    pub fn has_capsule(&self) -> bool {
+        self.capsule_dir().join("capsule.env").exists()
+    }
+
     pub fn init_world_settings(&self) -> anyhow::Result<PathBuf> {
         let dst = self.world_user_settings_dir();
         std::fs::create_dir_all(&dst)?;

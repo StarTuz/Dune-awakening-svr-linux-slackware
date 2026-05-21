@@ -76,7 +76,13 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let snap = app.snapshot.as_ref();
     let phase = snap.map(|s| s.battlegroup_phase.as_str()).unwrap_or("—");
     let title = sietch_title(app, snap).unwrap_or("dune-ctl");
-    let loading = if app.loading { " [loading]" } else { "" };
+    let loading = if app.update_task.is_some() {
+        " [updating]"
+    } else if app.loading {
+        " [loading]"
+    } else {
+        ""
+    };
     let active_world = app.cfg.title.as_deref().unwrap_or(&app.cfg.battlegroup);
 
     let fls_span = snap
@@ -737,26 +743,63 @@ fn draw_map_detail(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_log(f: &mut Frame, app: &App, area: Rect) {
     let visible = (area.height as usize).saturating_sub(2); // minus borders
-    let lines: Vec<Line> = app
-        .log
-        .iter()
-        .rev()
-        .take(visible)
-        .rev()
-        .map(|l| Line::from(l.as_str()))
-        .collect();
+    let update_output = app.update_task.is_some();
+    let title = if update_output {
+        "Update Output (running...)"
+    } else {
+        "Log"
+    };
+    let lines: Vec<Line> = if update_output {
+        if app.update_lines.is_empty() {
+            vec![Line::from(Span::styled(
+                "Starting update...",
+                Style::default().fg(Color::DarkGray),
+            ))]
+        } else {
+            app.update_lines
+                .iter()
+                .rev()
+                .take(visible)
+                .rev()
+                .map(|l| {
+                    let style = if l.starts_with("[err]") {
+                        Style::default().fg(Color::Red)
+                    } else {
+                        Style::default()
+                    };
+                    Line::from(Span::styled(l.as_str().to_string(), style))
+                })
+                .collect()
+        }
+    } else {
+        app.log
+            .iter()
+            .rev()
+            .take(visible)
+            .rev()
+            .map(|l| Line::from(l.as_str()))
+            .collect()
+    };
 
     f.render_widget(
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Log")),
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title)),
         area,
     );
 }
 
 fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
+    if app.update_task.is_some() {
+        f.render_widget(
+            Paragraph::new("[update running...]  [Tab/1-6] view  [r] refresh")
+                .style(Style::default().fg(Color::DarkGray)),
+            area,
+        );
+        return;
+    }
     let hint = match app.view {
         View::Worlds => "[↑/↓] select world  [I] init profile  [r] refresh  [q] quit",
         View::Dashboard => {
-            "[Tab/3] maps  [A/Z/R] primary sietch  [g] gateway  [r] refresh  [q] quit"
+            "[Tab/3] maps  [A/Z/R] primary sietch  [u] update  [g] gateway  [r] refresh  [q] quit"
         }
         View::Maps => "[Tab/4] settings  [s/x] map start/stop  [r] refresh  [q] quit",
         View::Settings => {

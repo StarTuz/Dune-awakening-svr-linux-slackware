@@ -23,6 +23,7 @@ PVCs, and backup environment.
 Commands:
   inventory                         Print current host/package/world isolation state
   create [options]                  Render a capsule without applying it to Kubernetes
+  refresh [options]                 Refresh an existing capsule from its package root
   package install [options]         Download a package with SteamCMD, then validate it
   package validate [options]        Validate an installed package root
   images load [options]             Import package images into k3s/containerd
@@ -40,6 +41,12 @@ Create options:
   --world-id NAME                   Battlegroup id; generated from token when omitted
   --host-ip IP                      Public host IP advertised to FLS
   --force                           Overwrite an existing capsule directory
+
+Refresh options:
+  --env ptc|live                    Capsule environment (default: live)
+  --world-id NAME                   Capsule battlegroup id
+  --package-root PATH               Package root containing updated package images
+  --allow-downgrade                 Allow refresh to render an older image tag
 
 Package options:
   --env ptc|live                    Package environment (default: live)
@@ -469,6 +476,125 @@ active_battlegroups() {
     sudo kubectl get battlegroups -A --no-headers 2>/dev/null | awk '{print $2}'
 }
 
+set_capsule_value() {
+    local file="$1"
+    local key="$2"
+    local value="$3"
+    if grep -q "^$key=" "$file"; then
+        sed -i "s|^$key=.*|$key=$(sed_escape "$value")|" "$file"
+    else
+        printf '%s=%s\n' "$key" "$value" >> "$file"
+    fi
+}
+
+refresh_capsule_manifest() {
+    local file="$1"
+    local image_tag="$2"
+    local host_id="$3"
+
+    [ -f "$file" ] || return 0
+    sed -i -E \
+        "s#(registry\\.funcom\\.com/funcom/self-hosting/seabass-server(-[a-z-]+)?):[^[:space:]]+#\\1:$(sed_escape "$image_tag")#g" \
+        "$file"
+    sed -i "/name: HOST_DATACENTER_ID/{n;s/value: .*/value: $(sed_escape "$host_id")/;}" "$file"
+}
+
+image_tag_revision() {
+    printf '%s\n' "$1" | sed -n 's/^\([0-9][0-9]*\).*/\1/p'
+}
+
+current_capsule_image_tag() {
+    local file="$1"
+    [ -f "$file" ] || return 0
+    grep -m1 -Eo 'registry\.funcom\.com/funcom/self-hosting/seabass-server:[^[:space:]]+' "$file" \
+        | sed 's/^.*://'
+}
+
+refresh_capsule() {
+    local env="live"
+    local world_id=""
+    local package_root=""
+    local app_id=""
+    local allow_downgrade="false"
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --env)
+                env="${2:-}"
+                shift 2
+                ;;
+            --world-id)
+                world_id="${2:-}"
+                shift 2
+                ;;
+            --package-root)
+                package_root="${2:-}"
+                shift 2
+                ;;
+            --app-id)
+                app_id="${2:-}"
+                shift 2
+                ;;
+            --allow-downgrade)
+                allow_downgrade="true"
+                shift
+                ;;
+            *)
+                die "unknown refresh option: $1"
+                ;;
+        esac
+    done
+
+    validate_env "$env"
+    app_id="${app_id:-$(default_app_id "$env")}"
+
+    local dir meta token host_id image_tag manifest steam_build steam_name
+    dir="$(resolve_capsule_dir "$env" "$world_id")"
+    meta="$dir/capsule.env"
+    package_root="${package_root:-$(capsule_value "$meta" package_root)}"
+    [ -n "$package_root" ] || die "capsule package_root missing"
+    validate_package_root "$env" "$app_id" "$package_root" >/dev/null
+
+    token="$(awk '/ServiceAuthToken=/ {sub(/^.*ServiceAuthToken=/, ""); print; exit}' "$dir/battlegroup.yaml")"
+    if [ -z "$token" ]; then
+        token="$(awk '/value: eyJ/ {print $2; exit}' "$dir/fls-secret.yaml")"
+    fi
+    host_id="$(token_host_id "$token")"
+    [ -n "$host_id" ] || die "unable to derive token HostId from capsule"
+
+    image_tag="$(cat "$package_root/images/battlegroup/version.txt")"
+    local current_tag current_revision image_revision
+    current_tag="$(current_capsule_image_tag "$dir/battlegroup.yaml")"
+    current_revision="$(image_tag_revision "$current_tag")"
+    image_revision="$(image_tag_revision "$image_tag")"
+    if [ "$allow_downgrade" != "true" ] \
+        && [ -n "$current_revision" ] \
+        && [ -n "$image_revision" ] \
+        && [ "$current_revision" -gt "$image_revision" ]; then
+        die "refusing to refresh $world_id from newer image $current_tag to older package image $image_tag; run package install first or pass --allow-downgrade"
+    fi
+    manifest="$(package_manifest "$package_root" "$app_id")"
+    steam_build="$(acf_value "$manifest" buildid)"
+    steam_name="$(acf_name "$manifest")"
+
+    refresh_capsule_manifest "$dir/battlegroup.yaml" "$image_tag" "$host_id"
+    refresh_capsule_manifest "$DUNE_HOME/$world_id.yaml" "$image_tag" "$host_id"
+    set_capsule_value "$meta" package_root "$package_root"
+    set_capsule_value "$meta" steam_app_id "$app_id"
+    set_capsule_value "$meta" steam_build "${steam_build:-unknown}"
+    set_capsule_value "$meta" steam_name "${steam_name:-unknown}"
+    set_capsule_value "$meta" battlegroup_image_tag "$image_tag"
+    set_capsule_value "$meta" token_host_id "$host_id"
+
+    echo "Capsule refreshed:"
+    echo "  env=$env"
+    echo "  world_id=$world_id"
+    echo "  package_root=$package_root"
+    echo "  steam_build=${steam_build:-unknown}"
+    echo "  battlegroup_image_tag=$image_tag"
+    echo "  host_datacenter_id=$host_id"
+}
+
 activate_capsule() {
     local env="live"
     local world_id=""
@@ -580,6 +706,7 @@ render_template_file() {
     local postgres_pass="$9"
     local dune_pass="${10}"
     local host_ip="${11}"
+    local host_id="${12}"
 
     cp "$src" "$dst"
     sed -i \
@@ -594,6 +721,9 @@ render_template_file() {
         "$dst"
     if [ -n "$host_ip" ]; then
         sed -i -e "s/value: 127\\.0\\.0\\.1/value: $(sed_escape "$host_ip")/g" "$dst"
+    fi
+    if [ -n "$host_id" ]; then
+        sed -i "/name: HOST_DATACENTER_ID/{n;s/value: .*/value: $(sed_escape "$host_id")/;}" "$dst"
     fi
 }
 
@@ -714,15 +844,15 @@ create_capsule() {
     render_template_file \
         "$package_root/scripts/setup/templates/world-template.yaml" \
         "$capsule_dir/battlegroup.yaml" \
-        "$world_name" "$world_id" "$region" "$image_tag" "$token" "$rmq_secret" "$postgres_pass" "$dune_pass" "$host_ip"
+        "$world_name" "$world_id" "$region" "$image_tag" "$token" "$rmq_secret" "$postgres_pass" "$dune_pass" "$host_ip" "$host_id"
     render_template_file \
         "$package_root/scripts/setup/templates/fls-secret.yaml" \
         "$capsule_dir/fls-secret.yaml" \
-        "$world_name" "$world_id" "$region" "$image_tag" "$token" "$rmq_secret" "$postgres_pass" "$dune_pass" "$host_ip"
+        "$world_name" "$world_id" "$region" "$image_tag" "$token" "$rmq_secret" "$postgres_pass" "$dune_pass" "$host_ip" "$host_id"
     render_template_file \
         "$package_root/scripts/setup/templates/rmq-secret.yaml" \
         "$capsule_dir/rmq-secret.yaml" \
-        "$world_name" "$world_id" "$region" "$image_tag" "$token" "$rmq_secret" "$postgres_pass" "$dune_pass" "$host_ip"
+        "$world_name" "$world_id" "$region" "$image_tag" "$token" "$rmq_secret" "$postgres_pass" "$dune_pass" "$host_ip" "$host_id"
 
     copy_user_settings "$package_root" "$capsule_dir/UserSettings" "$sietch_name"
     ln -sfn "$package_root" "$capsule_dir/package-root"
@@ -898,6 +1028,10 @@ case "${1:-}" in
     create)
         shift
         create_capsule "$@"
+        ;;
+    refresh)
+        shift
+        refresh_capsule "$@"
         ;;
     package)
         shift

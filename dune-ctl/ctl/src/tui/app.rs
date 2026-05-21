@@ -8,7 +8,7 @@ use dune_ctl_core::{
     config::{Config, WorldProfile},
     gateway,
     health::HealthSnapshot,
-    logs, maps, settings, sietches,
+    logs, maps, settings, sietches, update,
 };
 use ratatui::{backend::Backend, Terminal};
 use tokio::task::JoinHandle;
@@ -41,6 +41,9 @@ pub struct App {
     pub backup_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     pub backup_lines: Vec<String>,
     pub backup_list_loading: bool,
+    pub update_task: Option<JoinHandle<Result<()>>>,
+    pub update_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+    pub update_lines: Vec<String>,
     pub view: View,
     pub selected: usize,
     pub settings_selected: usize,
@@ -71,6 +74,7 @@ pub enum PendingAction {
     InitWorldSettings,
     ClearSietchPassword,
     RunBackup,
+    RunUpdate,
     DeleteBackup,
     RemoveSchedule,
 }
@@ -102,6 +106,7 @@ impl PendingAction {
             Self::InitWorldSettings => "initialize world settings profile",
             Self::ClearSietchPassword => "clear sietch password",
             Self::RunBackup => "run full backup",
+            Self::RunUpdate => "update world and start after",
             Self::DeleteBackup => "delete backup bundle",
             Self::RemoveSchedule => "remove backup schedule",
         }
@@ -135,6 +140,9 @@ impl PendingAction {
             }
             Self::RunBackup => {
                 "Runs dune-backup.sh: DB dump, k8s metadata, and settings snapshot. Takes 1–3 minutes. Output streams in the lower pane."
+            }
+            Self::RunUpdate => {
+                "Runs the live capsule-aware update: backup, SteamCMD validate, image import, capsule refresh, apply, start, gateway patch, and readiness checks. Connected players will be disconnected."
             }
             Self::DeleteBackup => {
                 "Permanently deletes the selected backup bundle from disk. Cannot be undone."
@@ -173,6 +181,9 @@ impl App {
             backup_rx: None,
             backup_lines: Vec::new(),
             backup_list_loading: false,
+            update_task: None,
+            update_rx: None,
+            update_lines: Vec::new(),
             view: View::Dashboard,
             selected: 0,
             settings_selected: 0,
@@ -188,6 +199,10 @@ impl App {
     }
 
     pub fn retarget_world(&mut self, index: usize) -> bool {
+        if self.update_task.is_some() {
+            self.push_log("update running; world retarget disabled");
+            return false;
+        }
         let Some(world) = self.worlds.get(index).cloned() else {
             return false;
         };
@@ -280,6 +295,7 @@ pub async fn run_loop<B: Backend>(terminal: &mut Terminal<B>, cfg: &Config) -> R
         finish_logs_task(&mut app).await;
         finish_backup_list_task(&mut app).await;
         finish_backup_task(&mut app).await;
+        finish_update_task(&mut app).await;
         terminal.draw(|f| ui::draw(f, &app))?;
 
         if event::poll(EVENT_TIMEOUT)? {
@@ -458,6 +474,22 @@ pub fn start_backup_run(app: &mut App) {
     app.push_log("backup run started");
 }
 
+pub fn start_update_run(app: &mut App) {
+    if app.update_task.is_some() {
+        app.push_log("update already running");
+        return;
+    }
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    app.update_rx = Some(rx);
+    app.update_lines.clear();
+    let cfg = app.cfg.clone();
+    app.update_task = Some(tokio::spawn(async move {
+        update::run_streamed(&cfg, update::UpdateOptions { start_after: true }, tx).await
+    }));
+    app.push_log("update run started");
+    app.push_log("update will refresh/apply the capsule and verify readiness");
+}
+
 async fn finish_backup_task(app: &mut App) {
     // Drain any new output lines each tick regardless of task completion
     if let Some(rx) = app.backup_rx.as_mut() {
@@ -493,6 +525,41 @@ async fn finish_backup_task(app: &mut App) {
     }
 }
 
+async fn finish_update_task(app: &mut App) {
+    if let Some(rx) = app.update_rx.as_mut() {
+        while let Ok(line) = rx.try_recv() {
+            app.update_lines.push(line);
+        }
+    }
+    if !app
+        .update_task
+        .as_ref()
+        .map(|t| t.is_finished())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    if let Some(rx) = app.update_rx.as_mut() {
+        while let Ok(line) = rx.try_recv() {
+            app.update_lines.push(line);
+        }
+    }
+    let Some(task) = app.update_task.take() else {
+        return;
+    };
+    app.update_rx = None;
+    match task.await {
+        Ok(Ok(())) => {
+            app.push_log("update complete");
+            app.push_log("follow-up: verify gateway patch and server browser");
+            app.worlds = Config::discover_worlds().unwrap_or_default();
+            start_refresh(app);
+        }
+        Ok(Err(e)) => app.push_log(format!("update error: {:#}", e)),
+        Err(e) => app.push_log(format!("update task error: {}", e)),
+    }
+}
+
 async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     if app.input.is_some() {
         handle_input_key(app, code).await;
@@ -507,6 +574,39 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 app.pending = None;
             }
             _ => {}
+        }
+        return;
+    }
+
+    if app.update_task.is_some() {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                app.push_log("update running; quit disabled until it finishes");
+            }
+            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                app.push_log("update running; interrupt disabled until it finishes");
+            }
+            KeyCode::Tab => {
+                app.view = match app.view {
+                    View::Worlds => View::Dashboard,
+                    View::Dashboard => View::Maps,
+                    View::Maps => View::Settings,
+                    View::Settings => View::Logs,
+                    View::Logs => View::Backups,
+                    View::Backups => View::Worlds,
+                };
+            }
+            KeyCode::Char('1') => app.view = View::Worlds,
+            KeyCode::Char('2') => app.view = View::Dashboard,
+            KeyCode::Char('3') => app.view = View::Maps,
+            KeyCode::Char('4') => app.view = View::Settings,
+            KeyCode::Char('5') => app.view = View::Logs,
+            KeyCode::Char('6') => app.view = View::Backups,
+            KeyCode::Char('r') => {
+                app.push_log("refreshing...");
+                refresh_world_context(app);
+            }
+            _ => app.push_log("update running; action disabled until it finishes"),
         }
         return;
     }
@@ -564,6 +664,17 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         }
         KeyCode::Char('R') => {
             app.pending = Some(PendingAction::RestartSietch);
+        }
+        KeyCode::Char('u') => {
+            if app.view == View::Dashboard {
+                if app.update_task.is_some() {
+                    app.push_log("update already running");
+                } else if app.backup_task.is_some() {
+                    app.push_log("backup running; wait before starting update");
+                } else {
+                    app.pending = Some(PendingAction::RunUpdate);
+                }
+            }
         }
         KeyCode::Char('N') => {
             app.view = View::Settings;
@@ -910,6 +1021,10 @@ async fn execute_pending(app: &mut App) {
             start_backup_run(app);
             Ok(())
         }
+        PendingAction::RunUpdate => {
+            start_update_run(app);
+            Ok(())
+        }
         PendingAction::DeleteBackup => {
             if let Some(entry) = app.backup_entries.get(app.backup_selected) {
                 let path = entry.path.clone();
@@ -935,6 +1050,9 @@ async fn execute_pending(app: &mut App) {
             }
             if action == PendingAction::RemoveSchedule {
                 app.backup_schedule = backup::read_schedule();
+                return;
+            }
+            if action == PendingAction::RunUpdate {
                 return;
             }
             app.push_target_log();
