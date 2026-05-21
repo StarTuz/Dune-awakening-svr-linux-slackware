@@ -105,10 +105,10 @@ async fn run_live_capsule_streamed(
     tx: tokio::sync::mpsc::UnboundedSender<String>,
 ) -> Result<()> {
     send(&tx, "live capsule update selected");
-    send(&tx, "step 1/8: backup");
+    send(&tx, "step 1/9: backup");
     backup::run_streamed(cfg, false, None, tx.clone()).await?;
 
-    send(&tx, "step 2/8: install/validate live package");
+    send(&tx, "step 2/9: install/validate live package");
     run_capsule_command(
         cfg,
         &["package", "install", "--env", "live", "--app-id", "4754530"],
@@ -116,7 +116,7 @@ async fn run_live_capsule_streamed(
     )
     .await?;
 
-    send(&tx, "step 3/8: import live package images");
+    send(&tx, "step 3/9: import live package images");
     run_capsule_command(
         cfg,
         &["images", "load", "--env", "live", "--app-id", "4754530"],
@@ -124,7 +124,15 @@ async fn run_live_capsule_streamed(
     )
     .await?;
 
-    send(&tx, "step 4/8: refresh capsule metadata");
+    send(&tx, "step 4/9: verify registered package images");
+    run_capsule_command(
+        cfg,
+        &["images", "verify", "--env", "live", "--app-id", "4754530"],
+        tx.clone(),
+    )
+    .await?;
+
+    send(&tx, "step 5/9: refresh capsule metadata");
     run_capsule_command(
         cfg,
         &[
@@ -140,7 +148,7 @@ async fn run_live_capsule_streamed(
     )
     .await?;
 
-    send(&tx, "step 5/8: apply refreshed capsule");
+    send(&tx, "step 6/9: apply refreshed capsule");
     run_capsule_command(
         cfg,
         &[
@@ -156,13 +164,13 @@ async fn run_live_capsule_streamed(
     )
     .await?;
 
-    send(&tx, "step 6/8: start battlegroup");
+    send(&tx, "step 7/9: start battlegroup");
     battlegroup::start(cfg).await?;
 
-    send(&tx, "step 7/8: apply gateway patch");
+    send(&tx, "step 8/9: apply gateway patch");
     patch_gateway_with_retry(cfg, tx.clone()).await?;
 
-    send(&tx, "step 8/8: wait for preflight-ready state");
+    send(&tx, "step 9/9: wait for preflight-ready state");
     wait_ready(cfg, tx.clone()).await?;
 
     send(&tx, "live capsule update complete");

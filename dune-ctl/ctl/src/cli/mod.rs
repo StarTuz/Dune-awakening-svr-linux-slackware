@@ -219,6 +219,18 @@ pub enum CapsuleImagesCommand {
         #[arg(long)]
         app_id: Option<String>,
     },
+    /// Verify package images are registered in k3s/containerd
+    Verify {
+        /// Capsule environment
+        #[arg(long, default_value = "live")]
+        env: String,
+        /// Package root to verify
+        #[arg(long)]
+        package_root: Option<String>,
+        /// Steam app id
+        #[arg(long)]
+        app_id: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -676,6 +688,21 @@ async fn cmd_capsules(action: CapsulesCommand, cfg: &Config) -> Result<()> {
                 let mut args = vec![
                     "images".to_string(),
                     "load".to_string(),
+                    "--env".to_string(),
+                    env,
+                ];
+                capsule_option(&mut args, "--package-root", package_root);
+                capsule_option(&mut args, "--app-id", app_id);
+                capsules::run_stream(cfg, &args).await?;
+            }
+            CapsuleImagesCommand::Verify {
+                env,
+                package_root,
+                app_id,
+            } => {
+                let mut args = vec![
+                    "images".to_string(),
+                    "verify".to_string(),
                     "--env".to_string(),
                     env,
                 ];

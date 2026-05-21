@@ -27,6 +27,7 @@ Commands:
   package install [options]         Download a package with SteamCMD, then validate it
   package validate [options]        Validate an installed package root
   images load [options]             Import package images into k3s/containerd
+  images verify [options]           Verify package images are registered in k3s/containerd
   activate [options]                Dry-run or apply a rendered capsule
   -h, --help                        Show this help
 
@@ -57,6 +58,7 @@ Package options:
 Image options:
   --env ptc|live                    Package environment (default: live)
   --package-root PATH               Package root to import from
+  --app-id ID                       Steam app id
 
 Activate options:
   --env ptc|live                    Capsule environment (default: live)
@@ -407,18 +409,46 @@ package_command() {
 }
 
 image_tars() {
+    local package_root="$1"
+    (cd "$package_root" && find images -type f -name '*.tar' | sort)
+}
+
+expected_package_images() {
+    local package_root="$1"
+    local bg_version op_version
+    bg_version="$(cat "$package_root/images/battlegroup/version.txt")"
+    op_version="$(cat "$package_root/images/operators/version.txt")"
     cat <<EOF
-images/operators/battlegroup-operator.tar
-images/operators/database-operator.tar
-images/operators/server-operator.tar
-images/operators/utilities-operator.tar
-images/battlegroup/server.tar
-images/battlegroup/server-bg-director.tar
-images/battlegroup/server-db-utils.tar
-images/battlegroup/server-gateway.tar
-images/battlegroup/server-rabbitmq.tar
-images/battlegroup/server-text-router.tar
+registry.funcom.com/funcom/self-hosting/seabass-server:$bg_version
+registry.funcom.com/funcom/self-hosting/seabass-server-bg-director:$bg_version
+registry.funcom.com/funcom/self-hosting/seabass-server-db-utils:$bg_version
+registry.funcom.com/funcom/self-hosting/seabass-server-gateway:$bg_version
+registry.funcom.com/funcom/self-hosting/seabass-server-rabbitmq:$bg_version
+registry.funcom.com/funcom/self-hosting/seabass-server-text-router:$bg_version
+registry.funcom.com/funcom/self-hosting/igw-k8s-battlegroup-operator:$op_version
+registry.funcom.com/funcom/self-hosting/igw-k8s-database-operator:$op_version
+registry.funcom.com/funcom/self-hosting/igw-k8s-server-operator:$op_version
+registry.funcom.com/funcom/self-hosting/igw-k8s-utilities-operator:$op_version
 EOF
+}
+
+verify_package_images_loaded() {
+    local package_root="$1"
+    local missing=0
+    local image
+
+    echo "Verifying package images in k3s/containerd:"
+    while IFS= read -r image; do
+        [ -n "$image" ] || continue
+        if sudo ctr -n k8s.io images ls -q | grep -Fxq "$image"; then
+            echo "  ok $image"
+        else
+            echo "  missing $image"
+            missing=1
+        fi
+    done < <(expected_package_images "$package_root")
+
+    [ "$missing" = 0 ] || die "one or more package images are not registered in k3s/containerd"
 }
 
 images_command() {
@@ -463,11 +493,18 @@ images_command() {
                 [ -n "$rel" ] || continue
                 echo "  import $rel"
                 sudo ctr -n k8s.io images import "$package_root/$rel"
-            done < <(image_tars)
+            done < <(image_tars "$package_root")
             echo "Image import complete."
+            verify_package_images_loaded "$package_root"
+            ;;
+        verify)
+            need_cmd sudo
+            echo "  env=$env"
+            echo "  package_root=$package_root"
+            verify_package_images_loaded "$package_root"
             ;;
         *)
-            die "images command must be load"
+            die "images command must be load or verify"
             ;;
     esac
 }
