@@ -8,7 +8,7 @@ use dune_ctl_core::{
     config::{Config, WorldProfile},
     gateway,
     health::HealthSnapshot,
-    logs, maps, settings, sietches, update,
+    logs, maintenance, maps, settings, sietches, update,
 };
 use ratatui::{backend::Backend, Terminal};
 use tokio::task::JoinHandle;
@@ -44,6 +44,9 @@ pub struct App {
     pub update_task: Option<JoinHandle<Result<()>>>,
     pub update_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     pub update_lines: Vec<String>,
+    pub shutdown_task: Option<JoinHandle<Result<()>>>,
+    pub shutdown_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+    pub shutdown_lines: Vec<String>,
     pub view: View,
     pub selected: usize,
     pub settings_selected: usize,
@@ -75,6 +78,7 @@ pub enum PendingAction {
     ClearSietchPassword,
     RunBackup,
     RunUpdate,
+    CleanShutdown,
     DeleteBackup,
     RemoveSchedule,
 }
@@ -107,6 +111,7 @@ impl PendingAction {
             Self::ClearSietchPassword => "clear sietch password",
             Self::RunBackup => "run full backup",
             Self::RunUpdate => "update world and start after",
+            Self::CleanShutdown => "cleanly shut down Dune for host reboot",
             Self::DeleteBackup => "delete backup bundle",
             Self::RemoveSchedule => "remove backup schedule",
         }
@@ -143,6 +148,9 @@ impl PendingAction {
             }
             Self::RunUpdate => {
                 "Runs the live capsule-aware update: backup, SteamCMD validate, image import, capsule refresh, apply, start, gateway patch, and readiness checks. Connected players will be disconnected."
+            }
+            Self::CleanShutdown => {
+                "Runs the planned-maintenance sequence: full backup, BattleGroup stop, then waits until game servers are stopped. The host is not rebooted."
             }
             Self::DeleteBackup => {
                 "Permanently deletes the selected backup bundle from disk. Cannot be undone."
@@ -184,6 +192,9 @@ impl App {
             update_task: None,
             update_rx: None,
             update_lines: Vec::new(),
+            shutdown_task: None,
+            shutdown_rx: None,
+            shutdown_lines: Vec::new(),
             view: View::Dashboard,
             selected: 0,
             settings_selected: 0,
@@ -199,8 +210,8 @@ impl App {
     }
 
     pub fn retarget_world(&mut self, index: usize) -> bool {
-        if self.update_task.is_some() {
-            self.push_log("update running; world retarget disabled");
+        if self.update_task.is_some() || self.shutdown_task.is_some() {
+            self.push_log("operation running; world retarget disabled");
             return false;
         }
         let Some(world) = self.worlds.get(index).cloned() else {
@@ -226,6 +237,9 @@ impl App {
         self.backup_list_task = None;
         self.backup_task = None;
         self.backup_rx = None;
+        self.shutdown_task = None;
+        self.shutdown_rx = None;
+        self.shutdown_lines.clear();
         self.loading = true;
         self.push_log(format!(
             "retargeted to {} / {}",
@@ -296,6 +310,7 @@ pub async fn run_loop<B: Backend>(terminal: &mut Terminal<B>, cfg: &Config) -> R
         finish_backup_list_task(&mut app).await;
         finish_backup_task(&mut app).await;
         finish_update_task(&mut app).await;
+        finish_shutdown_task(&mut app).await;
         terminal.draw(|f| ui::draw(f, &app))?;
 
         if event::poll(EVENT_TIMEOUT)? {
@@ -490,6 +505,23 @@ pub fn start_update_run(app: &mut App) {
     app.push_log("update will refresh/apply the capsule and verify readiness");
 }
 
+pub fn start_clean_shutdown(app: &mut App) {
+    if app.shutdown_task.is_some() {
+        app.push_log("clean shutdown already running");
+        return;
+    }
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    app.shutdown_rx = Some(rx);
+    app.shutdown_lines.clear();
+    let cfg = app.cfg.clone();
+    app.shutdown_task = Some(tokio::spawn(async move {
+        maintenance::shutdown_for_reboot_streamed(&cfg, maintenance::ShutdownOptions::default(), tx)
+            .await
+    }));
+    app.push_log("clean shutdown started");
+    app.push_log("shutdown will back up, stop BattleGroup, and wait for game servers");
+}
+
 async fn finish_backup_task(app: &mut App) {
     // Drain any new output lines each tick regardless of task completion
     if let Some(rx) = app.backup_rx.as_mut() {
@@ -560,6 +592,41 @@ async fn finish_update_task(app: &mut App) {
     }
 }
 
+async fn finish_shutdown_task(app: &mut App) {
+    if let Some(rx) = app.shutdown_rx.as_mut() {
+        while let Ok(line) = rx.try_recv() {
+            app.shutdown_lines.push(line);
+        }
+    }
+    if !app
+        .shutdown_task
+        .as_ref()
+        .map(|t| t.is_finished())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    if let Some(rx) = app.shutdown_rx.as_mut() {
+        while let Ok(line) = rx.try_recv() {
+            app.shutdown_lines.push(line);
+        }
+    }
+    let Some(task) = app.shutdown_task.take() else {
+        return;
+    };
+    app.shutdown_rx = None;
+    match task.await {
+        Ok(Ok(())) => {
+            app.push_log("clean shutdown complete");
+            app.push_log("host reboot can be run outside dune-ctl");
+            start_refresh(app);
+            start_backup_list_refresh(app);
+        }
+        Ok(Err(e)) => app.push_log(format!("clean shutdown error: {:#}", e)),
+        Err(e) => app.push_log(format!("clean shutdown task error: {}", e)),
+    }
+}
+
 async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     if app.input.is_some() {
         handle_input_key(app, code).await;
@@ -578,13 +645,21 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         return;
     }
 
-    if app.update_task.is_some() {
+    if app.update_task.is_some() || app.shutdown_task.is_some() {
+        let op = if app.shutdown_task.is_some() {
+            "clean shutdown"
+        } else {
+            "update"
+        };
         match code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                app.push_log("update running; quit disabled until it finishes");
+                app.push_log(format!("{} running; quit disabled until it finishes", op));
             }
             KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
-                app.push_log("update running; interrupt disabled until it finishes");
+                app.push_log(format!(
+                    "{} running; interrupt disabled until it finishes",
+                    op
+                ));
             }
             KeyCode::Tab => {
                 app.view = match app.view {
@@ -606,7 +681,7 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 app.push_log("refreshing...");
                 refresh_world_context(app);
             }
-            _ => app.push_log("update running; action disabled until it finishes"),
+            _ => app.push_log(format!("{} running; action disabled until it finishes", op)),
         }
         return;
     }
@@ -673,6 +748,15 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                     app.push_log("backup running; wait before starting update");
                 } else {
                     app.pending = Some(PendingAction::RunUpdate);
+                }
+            }
+        }
+        KeyCode::Char('Q') => {
+            if app.view == View::Dashboard {
+                if app.backup_task.is_some() {
+                    app.push_log("backup running; wait before clean shutdown");
+                } else {
+                    app.pending = Some(PendingAction::CleanShutdown);
                 }
             }
         }
@@ -1025,6 +1109,10 @@ async fn execute_pending(app: &mut App) {
             start_update_run(app);
             Ok(())
         }
+        PendingAction::CleanShutdown => {
+            start_clean_shutdown(app);
+            Ok(())
+        }
         PendingAction::DeleteBackup => {
             if let Some(entry) = app.backup_entries.get(app.backup_selected) {
                 let path = entry.path.clone();
@@ -1052,7 +1140,10 @@ async fn execute_pending(app: &mut App) {
                 app.backup_schedule = backup::read_schedule();
                 return;
             }
-            if action == PendingAction::RunUpdate {
+            if matches!(
+                action,
+                PendingAction::RunUpdate | PendingAction::CleanShutdown
+            ) {
                 return;
             }
             app.push_target_log();

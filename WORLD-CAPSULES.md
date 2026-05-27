@@ -8,41 +8,41 @@ character databases must never mix.
 
 ## Current Findings
 
-Assessed on 2026-05-19:
+Assessed on 2026-05-26 (`kubectl get battlegroups -A`, `dune-ctl worlds list`):
 
-- Current active world: `Slackware-Arrakis`
-  (`sh-db3533a2d5a25fb-xyyxbx`), environment `ptc`.
-- Active Live capsule: `Ixware` (`sh-db3533a2d5a25fb-silakw`),
+- **Current active world**: `Ixware` (`sh-db3533a2d5a25fb-silakw`),
   environment `live`, sietch `Sietch Silakwir`, region `North America`.
   The sietch password is intentionally left operator-managed and not set by
   `world-capsules.sh`.
+- **Cold (inactive) capsule**: `Slackware-Arrakis`
+  (`sh-db3533a2d5a25fb-xyyxbx`), environment `ptc`. Stored under
+  `~/.dune/capsules/ptc/sh-db3533a2d5a25fb-xyyxbx/` and its legacy
+  `~/.dune/sh-db3533a2d5a25fb-xyyxbx.yaml` spec.
 - Current installed package roots:
   - `/home/dune/dune-packages/live/app-4754530/server`: Steam App `4754530`,
-    build `23301681`, `Dune: Awakening Self-Hosted Server`.
+    build `23301681`, `Dune: Awakening Self-Hosted Server` (active).
   - `/home/dune/dune-server/server`: Steam App `3104830`, build `23243500`,
-    `Dune: Awakening Public Test Client Server`.
+    `Dune: Awakening Public Test Client Server` (cold).
   - `/home/dune/steamcmd/dune_server`: Steam App `3104830`, build `23216207`,
     older PTC package copy.
-- Official self-hosted server Steam tool exists as App ID `4754530` and has
-  been installed into its own Live package root.
-- Official package validation:
+- Live package validation (at activation):
   - Steam build: `23301681`
   - Battlegroup image tag: `1963158-0-shipping`
   - Operator image tag: `v1.5.0`
-- Official package images have been imported into k3s/containerd for
-  `1963158-0-shipping`.
-- Loaded local container image tags are PTC-era tags through
-  `1960494-0-shipping`; Funcom operators are `v1.5.0`.
+- Live package images have been imported into k3s/containerd for
+  `1963158-0-shipping`. Funcom operators are `v1.5.0`.
 - Current cluster has one battlegroup namespace:
-  `funcom-seabass-sh-db3533a2d5a25fb-xyyxbx`.
-- Current PTC public game RabbitMQ NodePorts:
+  `funcom-seabass-sh-db3533a2d5a25fb-silakw`.
+- Current public game RabbitMQ NodePorts (Live):
   - AMQP: `31982`
   - management HTTP: `30196`
 - The stock `world-template.yaml` pins the game RabbitMQ AMQP NodePort to
-  `31982`.
-- PTC backups are separated under
-  `/srv/backups/dune/ptc/sh-db3533a2d5a25fb-xyyxbx/` and their manifests carry
-  `environment=ptc`.
+  `31982`. Both PTC and Live capsules share these public NodePorts, which is
+  exactly why they cannot run simultaneously.
+- Live backups are written under
+  `/srv/backups/dune/live/sh-db3533a2d5a25fb-silakw/` with manifests stamped
+  `environment=live`. PTC bundles remain under
+  `/srv/backups/dune/ptc/sh-db3533a2d5a25fb-xyyxbx/`.
 
 Run current inventory:
 

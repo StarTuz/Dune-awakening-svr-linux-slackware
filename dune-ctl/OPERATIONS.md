@@ -61,6 +61,15 @@ dune-ctl
 Tab `1` is the world selector. Use `↑`/`↓` there to switch capsules; the
 active world retargets immediately and tabs `2` through `6` follow that world.
 
+### Dashboard keys
+
+| Key | Action |
+|-----|--------|
+| `Q` | Clean Dune shutdown for planned host reboot/maintenance |
+| `u` | Run update and start after |
+| `g` | Reapply gateway patch |
+| `A` / `Z` / `R` | Start / stop / restart primary Sietch |
+
 ### Maps view keys
 
 | Key | Action |
@@ -118,6 +127,27 @@ FLS token, primary Sietch health, and RAM. Exits non-zero on failure.
 dune-ctl preflight
 dune-ctl preflight --strict
 ```
+
+### `dune-ctl public-ip`
+
+Inspect or update the selected world's advertised public Internet IP.
+
+```sh
+dune-ctl --world Ixware public-ip show
+dune-ctl --world Ixware public-ip check
+dune-ctl --world Ixware public-ip set 47.145.31.211 --dry-run
+dune-ctl --world Ixware public-ip set 47.145.31.211 --yes
+dune-ctl --world Ixware public-ip apply-detected --dry-run
+```
+
+`set` updates local world/capsule files, patches the live BattleGroup utility
+env vars, repairs the gateway `--RMQGameHostname`, ensures
+`--RMQGameHttpPort=30196`, and removes stale last-applied metadata. Use
+`--skip-files` or `--skip-live` when intentionally updating only one side.
+`check` uses HTTPS public-IP providers and requires two matching valid public IP
+responses. It exits non-zero when the detected IP differs from configured state.
+`apply-detected` requires the same provider quorum and refuses to mutate unless
+`--yes` is passed.
 
 ### `dune-ctl worlds`
 
@@ -184,6 +214,23 @@ dune-ctl battlegroup restart
 
 Operates the entire battlegroup, not individual maps. After a restart, run
 `dune-ctl gateway-patch` to reapply the RMQ port argument.
+
+### `dune-ctl shutdown`
+
+Clean Dune-side shutdown for planned host maintenance. This does **not** reboot
+the host. It runs the recommended sequence in one confirmed operation:
+
+1. full backup bundle
+2. BattleGroup stop
+3. wait until game servers are stopped
+
+```sh
+dune-ctl --world Ixware shutdown --yes
+dune-ctl --world Ixware shutdown --yes --skip-backup
+dune-ctl --world Ixware shutdown --yes --timeout 600
+```
+
+In the TUI Dashboard, press `Q` and confirm to run the same workflow.
 
 ### `dune-ctl settings`
 

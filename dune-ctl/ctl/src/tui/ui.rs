@@ -78,6 +78,8 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let title = sietch_title(app, snap).unwrap_or("dune-ctl");
     let loading = if app.update_task.is_some() {
         " [updating]"
+    } else if app.shutdown_task.is_some() {
+        " [shutting down]"
     } else if app.loading {
         " [loading]"
     } else {
@@ -510,7 +512,7 @@ fn draw_gateway_panel(f: &mut Frame, snap: Option<&HealthSnapshot>, area: Rect) 
                 opt_u32(gw.ready_replicas),
                 opt_u32(gw.updated_replicas)
             )),
-            Line::from("Expected GameRmqHttpAddress: 47.145.51.160:30196"),
+            Line::from("Expected GameRmqHttpAddress: 47.145.31.211:30196"),
         ]
     } else {
         vec![Line::from("Gateway deployment status unavailable.")]
@@ -744,19 +746,32 @@ fn draw_map_detail(f: &mut Frame, app: &App, area: Rect) {
 fn draw_log(f: &mut Frame, app: &App, area: Rect) {
     let visible = (area.height as usize).saturating_sub(2); // minus borders
     let update_output = app.update_task.is_some();
+    let shutdown_output = app.shutdown_task.is_some();
     let title = if update_output {
         "Update Output (running...)"
+    } else if shutdown_output {
+        "Clean Shutdown Output (running...)"
     } else {
         "Log"
     };
-    let lines: Vec<Line> = if update_output {
-        if app.update_lines.is_empty() {
+    let lines: Vec<Line> = if update_output || shutdown_output {
+        let output_lines = if shutdown_output {
+            &app.shutdown_lines
+        } else {
+            &app.update_lines
+        };
+        let starting = if shutdown_output {
+            "Starting clean shutdown..."
+        } else {
+            "Starting update..."
+        };
+        if output_lines.is_empty() {
             vec![Line::from(Span::styled(
-                "Starting update...",
+                starting,
                 Style::default().fg(Color::DarkGray),
             ))]
         } else {
-            app.update_lines
+            output_lines
                 .iter()
                 .rev()
                 .take(visible)
@@ -788,9 +803,14 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
-    if app.update_task.is_some() {
+    if app.update_task.is_some() || app.shutdown_task.is_some() {
+        let op = if app.shutdown_task.is_some() {
+            "clean shutdown running..."
+        } else {
+            "update running..."
+        };
         f.render_widget(
-            Paragraph::new("[update running...]  [Tab/1-6] view  [r] refresh")
+            Paragraph::new(format!("[{}]  [Tab/1-6] view  [r] refresh", op))
                 .style(Style::default().fg(Color::DarkGray)),
             area,
         );
@@ -799,7 +819,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
     let hint = match app.view {
         View::Worlds => "[↑/↓] select world  [I] init profile  [r] refresh  [q] quit",
         View::Dashboard => {
-            "[Tab/3] maps  [A/Z/R] primary sietch  [u] update  [g] gateway  [r] refresh  [q] quit"
+            "[Tab/3] maps  [A/Z/R] primary sietch  [Q] clean shutdown  [u] update  [g] gateway  [r] refresh"
         }
         View::Maps => "[Tab/4] settings  [s/x] map start/stop  [r] refresh  [q] quit",
         View::Settings => {

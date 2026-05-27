@@ -6,15 +6,18 @@ server on `arrakis.algieba.org`.
 
 `STATUS.md` is the current source of truth. `ARCHITECTURE.md` explains the
 system shape and control loops. `FILE-LOCATIONS.md` indexes important paths.
+`INSTALLER-DESIGN.md` captures the future cross-distro installer direction.
+`PUBLIC-IP.md` documents public Internet IP changes and router checks.
 `CLAUDE.md` contains detailed operator notes for future agent sessions.
 
 ## Current State
 
 - Host: `arrakis.algieba.org`
 - LAN IP: `192.168.254.200`
-- Public IP: `47.145.51.160`
-- Battlegroup: `sh-db3533a2d5a25fb-xyyxbx` / `Slackware-Arrakis`
-- Namespace: `funcom-seabass-sh-db3533a2d5a25fb-xyyxbx`
+- Public IP: `47.145.31.211`
+- Active battlegroup (Live capsule): `sh-db3533a2d5a25fb-silakw` / `Ixware`
+- Namespace: `funcom-seabass-sh-db3533a2d5a25fb-silakw`
+- Inactive PTC capsule: `sh-db3533a2d5a25fb-xyyxbx` / `Slackware-Arrakis`
 - Current maps: `Survival_1`, `Overmap`, and `DeepDesert_1` can all be run together when validating travel/load behavior
 - Server browser: visible in the PTC/Experimental browser
 - Hagga Basin travel: confirmed working after firewall cleanup
@@ -49,17 +52,18 @@ system shape and control loops. `FILE-LOCATIONS.md` indexes important paths.
 # Overall status
 ~/dune-server/server/scripts/battlegroup.sh status
 sudo kubectl get battlegroup -A -o wide
-sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
+sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db3533a2d5a25fb-silakw
 
 # dune-ctl world targeting
 ~/dune-server/dune-ctl/target/release/dune-ctl worlds list
-~/dune-server/dune-ctl/target/release/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx status
-~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis preflight
-~/dune-server/dune-ctl/target/release/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx worlds init-settings
-~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis sietches list
-~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis settings status
+~/dune-server/dune-ctl/target/release/dune-ctl --world sh-db3533a2d5a25fb-silakw status
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware preflight
+~/dune-server/dune-ctl/target/release/dune-ctl --world sh-db3533a2d5a25fb-silakw worlds init-settings
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware sietches list
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware settings status
 
-# Restart/update
+# Planned shutdown / restart / update
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware shutdown --yes
 ~/dune-server/server/scripts/battlegroup.sh restart
 ~/dune-server/scripts/gateway-patch.sh
 ~/dune-server/scripts/update.sh
@@ -73,9 +77,9 @@ sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db353
 ~/dune-server/scripts/map-toggle.sh stop DeepDesert_1
 ~/dune-server/dune-ctl/target/release/dune-ctl maps start SH_Arrakeen
 ~/dune-server/dune-ctl/target/release/dune-ctl maps stop SH_Arrakeen
-~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis maps list
-~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis maps start DeepDesert_1
-~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis maps stop DeepDesert_1
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware maps list
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware maps start DeepDesert_1
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware maps stop DeepDesert_1
 
 # Firewall sanity
 grep -n '^FirewallBackend' /etc/firewalld/firewalld.conf
@@ -118,13 +122,13 @@ per-world settings profile:
 ```
 
 After that, `settings list/set/apply` for that world uses
-`~/.dune/worlds/<bg>/UserSettings/`. This is intended for the eventual
-PTC-to-official transition: create the official world, initialize its settings
-profile, verify it, then stop the old PTC battlegroup explicitly with
-`dune-ctl --world <ptc-bg> sietches stop`.
+`~/.dune/worlds/<bg>/UserSettings/`. The PTC-to-official transition has been
+completed: the Live capsule `Ixware` is now the active battlegroup, and the
+PTC capsule `Slackware-Arrakis` is cold. The same per-world settings flow
+applies when standing up additional worlds.
 
-`dune-ctl sietches list` shows the selected world's primary Sietch. The current
-PTC self-host package exposes one Sietch per BattleGroup, so
+`dune-ctl sietches list` shows the selected world's primary Sietch. The
+current self-host package exposes one Sietch per BattleGroup, so
 `dune-ctl sietches start|stop|restart` intentionally maps to the selected
 BattleGroup lifecycle. Keep using `maps start|stop <map>` for individual travel
 maps such as `DeepDesert_1` or story instances.
@@ -140,16 +144,16 @@ with `dune-ctl settings pull` before making more edits. `settings apply` and
 `settings apply-restart` refuse to overwrite deployed managed settings while
 drift exists unless you pass `--force`.
 
-Current `Slackware-Arrakis` profile hygiene:
+Active world profile hygiene:
 
 ```sh
-~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis settings status
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware settings status
 ```
 
 The selected world currently uses:
 
 ```text
-~/.dune/worlds/sh-db3533a2d5a25fb-xyyxbx/UserSettings/
+~/.dune/worlds/sh-db3533a2d5a25fb-silakw/UserSettings/
 ```
 
 Managed drift should normally be `0 changed managed setting(s)`. If drift is
@@ -159,39 +163,40 @@ the live deployed settings before further edits.
 
 ## dune-ctl Command Reference
 
-Use `--world Slackware-Arrakis` or `--world sh-db3533a2d5a25fb-xyyxbx` for
-explicit targeting. The TUI is the default when no subcommand is provided.
+Use `--world Ixware` or `--world sh-db3533a2d5a25fb-silakw` to target the
+active Live capsule; `--world Ixware` targets the inactive PTC
+capsule. The TUI is the default when no subcommand is provided.
 Examples below use `dune-ctl`; replace that with
 `~/dune-server/dune-ctl/target/release/dune-ctl` if it is not in `PATH`.
 
 ```sh
 # World and health
 dune-ctl worlds list
-dune-ctl --world Slackware-Arrakis status
-dune-ctl --world Slackware-Arrakis preflight
-dune-ctl --world Slackware-Arrakis preflight --strict
-dune-ctl --world Slackware-Arrakis diagnostics
-dune-ctl --world Slackware-Arrakis token-check
+dune-ctl --world Ixware status
+dune-ctl --world Ixware preflight
+dune-ctl --world Ixware preflight --strict
+dune-ctl --world Ixware diagnostics
+dune-ctl --world Ixware token-check
 
 # Primary Sietch lifecycle
-dune-ctl --world Slackware-Arrakis sietches list
-dune-ctl --world Slackware-Arrakis sietches start
-dune-ctl --world Slackware-Arrakis sietches stop
-dune-ctl --world Slackware-Arrakis sietches restart
+dune-ctl --world Ixware sietches list
+dune-ctl --world Ixware sietches start
+dune-ctl --world Ixware sietches stop
+dune-ctl --world Ixware sietches restart
 
 # Maps / travel surfaces
-dune-ctl --world Slackware-Arrakis maps list
-dune-ctl --world Slackware-Arrakis maps start DeepDesert_1
-dune-ctl --world Slackware-Arrakis maps stop DeepDesert_1
+dune-ctl --world Ixware maps list
+dune-ctl --world Ixware maps start DeepDesert_1
+dune-ctl --world Ixware maps stop DeepDesert_1
 
 # Settings
-dune-ctl --world Slackware-Arrakis settings list
-dune-ctl --world Slackware-Arrakis settings status
-dune-ctl --world Slackware-Arrakis settings pull
-dune-ctl --world Slackware-Arrakis settings set sietch_name "Arrakis-SlackwareLinux"
-dune-ctl --world Slackware-Arrakis settings set admin_password "secret"
-dune-ctl --world Slackware-Arrakis settings apply
-dune-ctl --world Slackware-Arrakis settings apply-restart
+dune-ctl --world Ixware settings list
+dune-ctl --world Ixware settings status
+dune-ctl --world Ixware settings pull
+dune-ctl --world Ixware settings set sietch_name "Arrakis-SlackwareLinux"
+dune-ctl --world Ixware settings set admin_password "secret"
+dune-ctl --world Ixware settings apply
+dune-ctl --world Ixware settings apply-restart
 
 # Logs
 dune-ctl logs Survival_1              # last 100 lines from game server pod
@@ -211,7 +216,7 @@ dune-ctl backup restore --yes <timestamp>   # restore (stop battlegroup first)
 dune-ctl players                      # table of online players
 
 # Update/security helpers
-dune-ctl --world Slackware-Arrakis gateway-patch
+dune-ctl --world Ixware gateway-patch
 ~/dune-server/scripts/update.sh --start-after
 ~/dune-server/scripts/security-audit.sh
 sudo ~/dune-server/scripts/resource-snapshot.sh known-good-YYYYMMDD-resources
@@ -219,12 +224,14 @@ sudo ~/dune-server/scripts/resource-snapshot.sh known-good-YYYYMMDD-resources
 
 Full CLI reference: `dune-ctl/OPERATIONS.md`
 
-LAN clients behind the Frontier router need an OUTPUT DNAT rule because the
-router does not provide NAT hairpin:
+LAN clients behind the TP-Link A7 can connect through the public FLS/browser
+path; NAT hairpin was confirmed working after removing the old Steam
+`-ConnectToIP=192.168.254.200:7784` override. The old Frontier router required
+a local OUTPUT DNAT workaround; keep this only as a fallback if hairpin breaks:
 
 ```sh
 sudo firewall-cmd --permanent --direct --add-rule ipv4 nat OUTPUT 0 \
-  -d 47.145.51.160 -j DNAT --to-destination 192.168.254.200
+  -d 47.145.31.211 -j DNAT --to-destination 192.168.254.200
 sudo firewall-cmd --reload
 ```
 

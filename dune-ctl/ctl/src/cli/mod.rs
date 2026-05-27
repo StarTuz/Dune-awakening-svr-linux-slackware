@@ -7,7 +7,7 @@ use dune_ctl_core::{
     fls::FlsTokenState,
     gateway,
     health::HealthSnapshot,
-    logs, maps, players, settings, sietches, update,
+    logs, maintenance, maps, players, public_ip, settings, sietches, update,
 };
 
 #[derive(Subcommand)]
@@ -54,10 +54,27 @@ pub enum Command {
     Diagnostics,
     /// Run full update pipeline (steamcmd + funcom-patches + gateway-patch)
     Update,
+    /// Cleanly stop the selected Dune world for planned host maintenance
+    Shutdown {
+        /// Confirm the shutdown without refusing at the safety gate
+        #[arg(long)]
+        yes: bool,
+        /// Skip the recommended pre-shutdown backup
+        #[arg(long)]
+        skip_backup: bool,
+        /// Seconds to wait for game servers to stop
+        #[arg(long, default_value = "300")]
+        timeout: u64,
+    },
     /// Re-apply --RMQGameHttpPort=30196 to the gateway Deployment
     GatewayPatch,
     /// Check FLS token expiry; exits non-zero if critical or expired
     TokenCheck,
+    /// Inspect or update the selected world's advertised public Internet IP
+    PublicIp {
+        #[command(subcommand)]
+        action: PublicIpCommand,
+    },
     /// Create or restore database backups
     Backup {
         #[command(subcommand)]
@@ -331,6 +348,52 @@ pub enum SettingsCommand {
     ApplyRestart,
 }
 
+#[derive(Subcommand)]
+pub enum PublicIpCommand {
+    /// Show configured public IP values from local files and live Kubernetes
+    Show,
+    /// Detect the current WAN IP from HTTPS providers and compare with config
+    Check {
+        /// Provider URLs returning a plain-text IP; may be repeated
+        #[arg(long = "provider")]
+        providers: Vec<String>,
+    },
+    /// Set the selected world's advertised public IP
+    Set {
+        ip: String,
+        /// Print planned changes without writing files or patching Kubernetes
+        #[arg(long)]
+        dry_run: bool,
+        /// Apply without refusing at the confirmation gate
+        #[arg(long)]
+        yes: bool,
+        /// Do not update local ~/.dune world/capsule files
+        #[arg(long)]
+        skip_files: bool,
+        /// Do not patch the live BattleGroup or gateway Deployment
+        #[arg(long)]
+        skip_live: bool,
+    },
+    /// Detect the WAN IP and apply it after provider quorum
+    ApplyDetected {
+        /// Provider URLs returning a plain-text IP; may be repeated
+        #[arg(long = "provider")]
+        providers: Vec<String>,
+        /// Print planned changes without writing files or patching Kubernetes
+        #[arg(long)]
+        dry_run: bool,
+        /// Apply without refusing at the confirmation gate
+        #[arg(long)]
+        yes: bool,
+        /// Do not update local ~/.dune world/capsule files
+        #[arg(long)]
+        skip_files: bool,
+        /// Do not patch the live BattleGroup or gateway Deployment
+        #[arg(long)]
+        skip_live: bool,
+    },
+}
+
 pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
     match cmd {
         Command::Worlds { action } => cmd_worlds(action, cfg).await,
@@ -343,8 +406,14 @@ pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
         Command::Settings { action } => cmd_settings(action, cfg).await,
         Command::Diagnostics => cmd_diagnostics(cfg).await,
         Command::Update => cmd_update(cfg).await,
+        Command::Shutdown {
+            yes,
+            skip_backup,
+            timeout,
+        } => cmd_shutdown(cfg, yes, skip_backup, timeout).await,
         Command::GatewayPatch => cmd_gateway_patch(cfg).await,
         Command::TokenCheck => cmd_token_check(cfg).await,
+        Command::PublicIp { action } => cmd_public_ip(action, cfg).await,
         Command::Backup { action } => cmd_backup(action, cfg).await,
         Command::Logs {
             target,
@@ -353,6 +422,176 @@ pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
         } => cmd_logs(cfg, &target, follow, tail).await,
         Command::Players => cmd_players(cfg).await,
         Command::Web { port } => cmd_web(port, cfg).await,
+    }
+}
+
+async fn cmd_public_ip(action: PublicIpCommand, cfg: &Config) -> Result<()> {
+    match action {
+        PublicIpCommand::Show => {
+            let summary = public_ip::show(cfg).await?;
+            println!("Public IP summary");
+            print_target_summary(cfg);
+            println!(
+                "Local files : {}",
+                display_list(&summary.local_ips, "none found")
+            );
+            println!(
+                "Live spec   : {}",
+                display_list(&summary.live_ips, "unavailable or none found")
+            );
+            println!(
+                "Gateway RMQ : {}",
+                summary.gateway_hostname.as_deref().unwrap_or("unavailable")
+            );
+            println!(
+                "RMQ HTTP    : {}",
+                match summary.gateway_http_patched {
+                    Some(true) => "patched",
+                    Some(false) => "missing",
+                    None => "unavailable",
+                }
+            );
+        }
+        PublicIpCommand::Check { providers } => {
+            let detection = public_ip::detect(&providers).await?;
+            let summary = public_ip::show(cfg).await?;
+            print_detection_summary(&detection);
+            println!(
+                "Configured  : local [{}], live [{}], gateway [{}]",
+                display_list(&summary.local_ips, "none"),
+                display_list(&summary.live_ips, "none"),
+                summary.gateway_hostname.as_deref().unwrap_or("none")
+            );
+            if configured_matches_detected(&summary, &detection.detected_ip) {
+                println!("State       : detected IP matches configured IP.");
+            } else {
+                println!("State       : detected IP differs from configured IP.");
+                std::process::exit(1);
+            }
+        }
+        PublicIpCommand::Set {
+            ip,
+            dry_run,
+            yes,
+            skip_files,
+            skip_live,
+        } => {
+            let plan = public_ip::plan_set(cfg, &ip, skip_live).await?;
+            print_public_ip_plan(&plan, skip_files);
+
+            if dry_run {
+                println!("Dry run: no changes applied.");
+                return Ok(());
+            }
+            if !yes {
+                anyhow::bail!(
+                    "refusing to apply without --yes; rerun with --dry-run to inspect only"
+                );
+            }
+
+            public_ip::apply_set(cfg, &ip, skip_files, skip_live).await?;
+            println!("Public IP updated to {}.", ip);
+            if !skip_live {
+                println!(
+                    "Gateway follow-up: rollout may refresh BattleGroup status asynchronously; cached status addresses can lag."
+                );
+            }
+        }
+        PublicIpCommand::ApplyDetected {
+            providers,
+            dry_run,
+            yes,
+            skip_files,
+            skip_live,
+        } => {
+            let detection = public_ip::detect(&providers).await?;
+            print_detection_summary(&detection);
+            let plan = public_ip::plan_set(cfg, &detection.detected_ip, skip_live).await?;
+            print_public_ip_plan(&plan, skip_files);
+
+            if dry_run {
+                println!("Dry run: no changes applied.");
+                return Ok(());
+            }
+            if !yes {
+                anyhow::bail!(
+                    "refusing to apply detected IP without --yes; rerun with --dry-run to inspect only"
+                );
+            }
+
+            public_ip::apply_set(cfg, &detection.detected_ip, skip_files, skip_live).await?;
+            println!("Public IP updated to {}.", detection.detected_ip);
+            if !skip_live {
+                println!(
+                    "Gateway follow-up: rollout may refresh BattleGroup status asynchronously; cached status addresses can lag."
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn configured_matches_detected(summary: &public_ip::PublicIpSummary, detected_ip: &str) -> bool {
+    let mut values = Vec::new();
+    values.extend(summary.local_ips.iter());
+    values.extend(summary.live_ips.iter());
+    if let Some(gateway) = &summary.gateway_hostname {
+        values.push(gateway);
+    }
+    !values.is_empty() && values.iter().all(|value| value.as_str() == detected_ip)
+}
+
+fn print_detection_summary(detection: &public_ip::DetectionSummary) {
+    println!("Detected IP : {}", detection.detected_ip);
+    println!("Providers");
+    for observation in &detection.observations {
+        match (&observation.ip, &observation.error) {
+            (Some(ip), _) => println!("  {:<32} {}", observation.provider, ip),
+            (_, Some(error)) if error.is_empty() => {
+                println!("  {:<32} error", observation.provider)
+            }
+            (_, Some(error)) => println!("  {:<32} error: {}", observation.provider, error),
+            _ => println!("  {:<32} no response", observation.provider),
+        }
+    }
+}
+
+fn display_list(values: &[String], empty: &str) -> String {
+    if values.is_empty() {
+        empty.to_string()
+    } else {
+        values.join(", ")
+    }
+}
+
+fn print_public_ip_plan(plan: &public_ip::PublicIpPlan, skip_files: bool) {
+    println!("Public IP update plan");
+    println!("New IP      : {}", plan.new_ip);
+    println!(
+        "Old IPs     : {}",
+        display_list(&plan.old_ips, "none detected")
+    );
+    println!(
+        "Live patch  : {}",
+        if plan.live { "yes" } else { "skipped" }
+    );
+    println!(
+        "File writes : {}",
+        if skip_files { "skipped" } else { "enabled" }
+    );
+    for file in &plan.files {
+        let state = if !file.exists {
+            if file.required {
+                "missing required"
+            } else {
+                "missing optional"
+            }
+        } else if file.changed {
+            "will update"
+        } else {
+            "clean"
+        };
+        println!("  {:<16} {}", state, file.path.display());
     }
 }
 
@@ -1071,6 +1310,41 @@ async fn cmd_update(cfg: &Config) -> Result<()> {
     let cfg = cfg.clone();
     let task = tokio::spawn(async move {
         update::run_streamed(&cfg, update::UpdateOptions { start_after: true }, tx).await
+    });
+
+    while !task.is_finished() {
+        while let Ok(line) = rx.try_recv() {
+            println!("{}", line);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    while let Ok(line) = rx.try_recv() {
+        println!("{}", line);
+    }
+    task.await??;
+    Ok(())
+}
+
+async fn cmd_shutdown(cfg: &Config, yes: bool, skip_backup: bool, timeout: u64) -> Result<()> {
+    if !yes {
+        anyhow::bail!(
+            "refusing to stop the Dune world without --yes; this disconnects players but does not reboot the host"
+        );
+    }
+
+    println!("Running clean Dune shutdown for planned maintenance...");
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let cfg = cfg.clone();
+    let task = tokio::spawn(async move {
+        maintenance::shutdown_for_reboot_streamed(
+            &cfg,
+            maintenance::ShutdownOptions {
+                skip_backup,
+                timeout_secs: timeout,
+            },
+            tx,
+        )
+        .await
     });
 
     while !task.is_finished() {

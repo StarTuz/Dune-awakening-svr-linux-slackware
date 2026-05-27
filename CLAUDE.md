@@ -4,9 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repository Is
 
-Operations repository for a Dune: Awakening self-hosted battlegroup running natively on Slackware Linux, co-hosted with an existing Conan Exiles Enhanced server. `README.md` is the quick operations overview, `ARCHITECTURE.md` describes the stable system shape, `FILE-LOCATIONS.md` indexes important paths, and `STATUS.md` is the current authoritative state.
+Operations repository for a Dune: Awakening self-hosted battlegroup running natively on Slackware Linux, co-hosted with an existing Conan Exiles Enhanced server.
 
-**Current state**: Fully running; security hardening applied 2026-05-14; Hagga Basin travel fixed 2026-05-15. Survival_1 and Overmap are running. DeepDesert_1 is cleanly stopped unless explicitly started with `map-toggle.sh`. Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB (zram + dune-vg SSD + sdc1) available as headroom. VPA recommender live (Off mode, memory only). Motherboard replacement to 64 GB pending. FLS token expires 2027-05-08 — rotate by 2027-04-08.
+Doc index:
+
+- `README.md` — quick operations overview
+- `STATUS.md` — current authoritative state (read first)
+- `ARCHITECTURE.md` — stable system shape and control loops
+- `FILE-LOCATIONS.md` — important paths
+- `BACKUP-RESTORE.md` — backup/restore runbook
+- `WORLD-CAPSULES.md` — PTC/Live cold-swap world isolation model
+- `PUBLIC-IP.md` — public-IP rotation runbook
+- `INSTALLER-DESIGN.md` — future cross-distro installer direction
+- `dune-ctl/OPERATIONS.md` — full `dune-ctl` CLI/TUI reference
+
+**Current state**: Fully running on 64 GB RAM (motherboard upgrade applied 2026-05-17, ~58.9 GB usable). Security hardening applied 2026-05-14; Hagga Basin travel fixed 2026-05-15. The **Live** world `Ixware` (`sh-db3533a2d5a25fb-silakw`, namespace `funcom-seabass-sh-db3533a2d5a25fb-silakw`) is the active capsule; the PTC capsule `Slackware-Arrakis` (`sh-db3533a2d5a25fb-xyyxbx`) is configured but cold. Survival_1 + Overmap run continuously; DeepDesert_1 can run alongside them and is started/stopped explicitly via `map-toggle.sh` or `dune-ctl maps`. Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB headroom (zram + dune-vg SSD + sdc1). VPA recommender live (Off mode, memory only). FLS token expires 2027-05-08 — rotate by 2027-04-08.
 
 ---
 
@@ -14,8 +26,9 @@ Operations repository for a Dune: Awakening self-hosted battlegroup running nati
 
 - **OS**: Slackware 15.0+, kernel 6.18.27, glibc 2.42, GCC 15.2.0
 - **CPU**: Intel Core i7-9700 (8 cores, no SMT)
-- **RAM**: 16 GB → 64 GB after ASUS Prime Z390-A motherboard swap
+- **RAM**: 64 GB (ASUS Prime Z390-A motherboard swap completed 2026-05-17, ~58.9 GB usable)
 - **LAN**: `192.168.254.200/24`
+- **Public IP**: `47.145.31.211` (TP-Link A7 router; see `PUBLIC-IP.md`)
 
 ---
 
@@ -43,9 +56,9 @@ Swap order: zram (RAM-backed, fastest) → dune-vg SSD → sdc1 HDD.
 `/srv/backups/dune/` — owned `dune:users`
 `/srv/backups/conan/` — owned `conan:users`
 
-Off-server backup strategy TBD.
-
-LVM setup is handled by `root-setup.sh` Step 8 (idempotent).
+LVM setup is handled by `root-setup.sh` Step 8 (idempotent). Backup runbook in
+`BACKUP-RESTORE.md`; nightly Dune backup cron at 03:00 installed via
+`dune-ctl backup schedule` (keeps 14). Off-server backup strategy still TBD.
 
 ---
 
@@ -62,8 +75,17 @@ Funcom ships everything as offline OCI image tarballs — no internet required a
 
 Each battlegroup gets its own namespace `funcom-seabass-<name>`. Inside: postgres, rabbitmq, gateway, director, text-router, filebrowser, and the game server pods.
 
-**Current battlegroup**: `sh-db3533a2d5a25fb-xyyxbx` ("Slackware-Arrakis")
-**Namespace**: `funcom-seabass-sh-db3533a2d5a25fb-xyyxbx`
+**Active battlegroup (Live capsule)**: `sh-db3533a2d5a25fb-silakw` ("Ixware", region North America)
+**Namespace**: `funcom-seabass-sh-db3533a2d5a25fb-silakw`
+**Configured PTC capsule (inactive)**: `sh-db3533a2d5a25fb-xyyxbx` ("Slackware-Arrakis")
+
+PTC and Live are kept as **cold-swappable world capsules** — only one is active
+at a time. See `WORLD-CAPSULES.md` for the isolation model, package roots
+(`/home/dune/dune-packages/<env>/...`), capsule storage layout
+(`~/.dune/capsules/<env>/<bg>/`), and `scripts/world-capsules.sh` for inventory
+and activation. PTC and Live use different Steam app IDs (PTC `3104830`, Live
+`4754530`) and different operator image tags, so they cannot safely coexist in
+one k3s cluster.
 
 ### Server operator chain (critical — read before touching maps)
 
@@ -123,8 +145,13 @@ newer k3s may already support cleaner approaches.
 | `memory-focused-scheduler.sh` | Custom Kubernetes scheduler daemon — binds pending pods to the single k3s node. Auto-starts via rc.local |
 | `map-toggle.sh` | Start/stop individual maps; handles the full BattleGroup CR + ServerSetScale chain |
 | `update.sh` | Full update flow: steamcmd pre-fetch with `validate`, re-apply funcom patches, run Funcom update, re-apply gateway patch |
-| `gateway-patch.sh` | Apply `--RMQGameHttpPort=30196` to gateway Deployment (idempotent; re-run after every restart) |
+| `gateway-patch.sh` | Apply `--RMQGameHttpPort=30196` (and current `--RMQGameHostname`) to gateway Deployment (idempotent; re-run after every restart) |
 | `security-audit.sh` | Check for accidental public exposure of sensitive services and NodePorts |
+| `db-credentials.sh` | Postgres credential guard; discovers the live DB port from the DatabaseDeployment/service and repairs drifted passwords |
+| `dune-backup.sh` | Host-side bundle: Funcom `DatabaseOperation` DB dump + Kubernetes metadata + UserSettings into `/srv/backups/dune/<env>/<battlegroup>/` |
+| `system-snapshot.sh` | Full btrfs snapshot of root + backup volume (run as root) |
+| `resource-snapshot.sh` | Capture host + cluster resource state (RSS, requests/limits, pod placement) into `/srv/backups/dune/resource-snapshots/` |
+| `world-capsules.sh` | Inventory and activate cold-swappable world capsules (PTC/Live) |
 | `funcom-patches.sh` | Re-apply Slackware patches to Funcom-shipped scripts after SteamCMD overwrites (uses baselines in `funcom-patches/`) |
 | `funcom-patches/` | Patched copies of Funcom scripts + `.upstream` baselines for drift detection |
 | `port-preempt.py` | Hold UDP 7779-7781 to prevent Dune game servers from binding ports owned by Path of Titans on the router |
@@ -135,6 +162,75 @@ newer k3s may already support cleaner approaches.
 | `vpa/vpa-objects.sh` | Creates Off-mode VPA objects for every Deployment and StatefulSet in battlegroup namespaces |
 | `vpa/watch-gameservers.sh` | Polls metrics-server for game server pod memory; logs RECOMMEND when usage > request + threshold |
 | `vpa/vpa-v1-crd-gen.yaml` | VPA CRDs downloaded by install.sh (v1.6.0, do not hand-edit) |
+
+---
+
+## dune-ctl
+
+`dune-ctl` is the Rust CLI/TUI that wraps kubectl, the Funcom scripts, and
+local config behind a single binary. It is the preferred day-to-day interface;
+the shell scripts above remain as the underlying mechanism and for emergency
+use.
+
+- Binary: `~/dune-server/dune-ctl/target/release/dune-ctl`
+- Build: `cd ~/dune-server/dune-ctl && cargo build --release -p dune-ctl`
+- Source: `dune-ctl/core/src/` (per-feature modules: `maps.rs`, `settings.rs`,
+  `backup.rs`, `capsules.rs`, `public_ip.rs`, `fls.rs`, `health.rs`, etc.) and
+  `dune-ctl/ctl/src/{cli,tui,web}/`
+- Full reference: `dune-ctl/OPERATIONS.md`
+
+### World targeting
+
+Every command resolves a world (battlegroup) in this order:
+
+1. `--world <id-or-title>` flag (e.g. `--world Ixware` or
+   `--world sh-db3533a2d5a25fb-silakw`)
+2. `DUNE_CTL_WORLD=<id>` environment variable
+3. Auto-selects the only world found in `~/.dune/`
+
+The selector reads `~/.dune/<bg>.yaml` and capsule-backed worlds under
+`~/.dune/capsules/<env>/<bg>/capsule.env`. List with `dune-ctl worlds list`.
+
+### Common commands
+
+```sh
+# Health, FLS, preflight
+dune-ctl --world Ixware status
+dune-ctl --world Ixware preflight           # --strict to fail on warn
+dune-ctl --world Ixware diagnostics
+dune-ctl --world Ixware token-check         # exits 2 if ≤14 days
+
+# Primary Sietch lifecycle (currently maps to BattleGroup spec.stop)
+dune-ctl --world Ixware sietches start|stop|restart
+
+# Maps (handles BattleGroup CR + ServerSetScale.replicas/partitions chain)
+dune-ctl --world Ixware maps list
+dune-ctl --world Ixware maps start DeepDesert_1
+dune-ctl --world Ixware maps stop  DeepDesert_1
+
+# Settings (per-world UserSettings profile under ~/.dune/worlds/<bg>/)
+dune-ctl --world Ixware settings status      # local-vs-deployed drift
+dune-ctl --world Ixware settings pull        # sync deployed → local
+dune-ctl --world Ixware settings set sietch_password <pw>
+dune-ctl --world Ixware settings apply       # refuses if drift; --force overrides
+dune-ctl --world Ixware settings apply-restart
+
+# Logs, players, backups, gateway, public IP
+dune-ctl logs <target> [-f] [--tail N]
+dune-ctl players
+dune-ctl backup list|run|restore --yes <timestamp>
+dune-ctl backup schedule [--show]                       # nightly 03:00 cron, keep 14
+dune-ctl --world Ixware gateway-patch
+dune-ctl --world Ixware public-ip show|check|set <ip>|apply-detected
+```
+
+### TUI
+
+Launching with no subcommand starts the TUI. Tabs: `1` Worlds, `2` Dashboard,
+`3` Maps, `4` Settings, `5` Logs, `6` Backups. Global keys: `Tab` cycles,
+`1`–`6` jump, `r` refresh, `q` quit. Tab `1` is the world/capsule selector —
+switching there retargets the rest of the TUI. Full keymap in
+`dune-ctl/OPERATIONS.md`.
 
 ---
 
@@ -226,6 +322,27 @@ Check expiry at any time: `~/dune-server/dune-ctl/target/release/dune-ctl token-
 
 When rotating: get a new token from the Funcom portal, patch all 28 occurrences in the BattleGroup CR, then run `gateway-patch.sh`. Tracked in dune-ctl (`token-check` exits 2 when ≤14 days remain).
 
+### Public IP
+
+Current public IP `47.145.31.211` is advertised to FLS through several places:
+local `~/.dune/<bg>.yaml` (and capsule files), live BattleGroup utility env vars
+(`HOST_DATACENTER_IP_ADDRESS` on `director`, `serverGateway`, `textRouter`),
+and the gateway Deployment's `--RMQGameHostname=` arg.
+
+Rotate or verify with:
+
+```sh
+dune-ctl --world <world> public-ip show
+dune-ctl --world <world> public-ip check                # queries external providers
+dune-ctl --world <world> public-ip set <new-ip> --dry-run
+dune-ctl --world <world> public-ip set <new-ip> --yes
+dune-ctl --world <world> public-ip apply-detected --yes
+```
+
+Router forwards required: UDP 7782-7790, TCP 31982, TCP 30196. The host cannot
+verify router forwarding — check the TP-Link A7 UI. Full runbook in
+`PUBLIC-IP.md`.
+
 ### Operator recovery after stuck state
 
 If battlegroup gets stuck in `Stopped` after a restart:
@@ -252,15 +369,22 @@ The Windows wizard writes the external IP to `/home/dune/.dune/settings.conf` be
 | Thing | Path |
 |---|---|
 | Server files / `DOWNLOAD_PATH` | `~/dune-server/server/` (symlink: `~/.dune/download`) |
-| Battlegroup CLI | `~/dune-server/server/scripts/battlegroup.sh` (also `~/.dune/bin/battlegroup`) |
-| World config YAML | `~/.dune/sh-db3533a2d5a25fb-xyyxbx.yaml` |
-| FLS / RMQ secrets | `~/.dune/sh-db3533a2d5a25fb-xyyxbx-{fls,rmq}-secret.yaml` |
-| Game server config | `~/dune-server/server/scripts/setup/config/User{Engine,Game}.ini` |
+| Battlegroup CLI (Funcom) | `~/dune-server/server/scripts/battlegroup.sh` (also `~/.dune/bin/battlegroup`) |
+| dune-ctl (release binary) | `~/dune-server/dune-ctl/target/release/dune-ctl` |
+| World config (Live, active) | `~/.dune/capsules/live/sh-db3533a2d5a25fb-silakw/capsule.env` (+ `battlegroup.yaml`) |
+| FLS / RMQ secrets (Live) | `~/.dune/sh-db3533a2d5a25fb-silakw-{fls,rmq}-secret.yaml` |
+| World config YAML (PTC, cold) | `~/.dune/sh-db3533a2d5a25fb-xyyxbx.yaml` |
+| FLS / RMQ secrets (PTC) | `~/.dune/sh-db3533a2d5a25fb-xyyxbx-{fls,rmq}-secret.yaml` |
+| Per-world UserSettings | `~/.dune/worlds/<bg>/UserSettings/User{Engine,Game}.ini` |
+| Capsule storage | `~/.dune/capsules/<env>/<bg>/{capsule.env,battlegroup.yaml,...}` |
+| Live package roots | `/home/dune/dune-packages/<env>/app-<steam-id>/server` |
+| Game server config defaults | `~/dune-server/server/scripts/setup/config/User{Engine,Game}.ini` |
 | Scheduler daemon | `~/dune-server/scripts/memory-focused-scheduler.sh` |
 | Scheduler log | `~/dune-server/logs/memory-focused-scheduler.log` |
 | k3s log | `~/dune-server/logs/k3s.log` |
 | Map toggle | `~/dune-server/scripts/map-toggle.sh` |
 | Backup volumes | `/srv/backups/{dune,conan}/` |
+| Funcom DB dump staging | `/funcom/artifacts/database-dumps/<battlegroup>` |
 | VPA scripts | `~/dune-server/scripts/vpa/` |
 | Windows package | `~/steamcmd/dune_server/` (depot 3104831) |
 
@@ -268,8 +392,11 @@ The Windows wizard writes the external IP to `/home/dune/.dune/settings.conf` be
 
 ## Management Commands
 
+Prefer `dune-ctl` for day-to-day work; the Funcom scripts and `map-toggle.sh`
+remain the underlying mechanism and the fallback when dune-ctl is unavailable.
+
 ```sh
-# Battlegroup
+# Battlegroup (Funcom scripts)
 ~/dune-server/server/scripts/battlegroup.sh list
 ~/dune-server/server/scripts/battlegroup.sh status
 ~/dune-server/server/scripts/battlegroup.sh start|stop|restart
@@ -278,16 +405,23 @@ The Windows wizard writes the external IP to `/home/dune/.dune/settings.conf` be
 ~/dune-server/server/scripts/battlegroup.sh operator-logs-export
 ~/dune-server/server/scripts/battlegroup.sh apply-default-usersettings
 
+# Preferred update wrapper (adds backup, stop, patch re-apply, gateway patch)
+~/dune-server/scripts/update.sh                                 # full pipeline
+~/dune-server/scripts/update.sh --start-after                   # also start after
+~/dune-server/scripts/update.sh --post-update-only --start-after  # resume after Funcom step
+
 # Individual map control
 ~/dune-server/scripts/map-toggle.sh list                        # all maps + live phases
 ~/dune-server/scripts/map-toggle.sh start DeepDesert_1
 ~/dune-server/scripts/map-toggle.sh stop  DeepDesert_1
+# or via dune-ctl:
+dune-ctl --world Ixware maps start DeepDesert_1
 
 # Cluster state
 sudo kubectl get nodes
 sudo kubectl get pods -A
-sudo kubectl get battlegroups -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
-sudo kubectl get serverstats  -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
+sudo kubectl get battlegroups -n funcom-seabass-sh-db3533a2d5a25fb-silakw
+sudo kubectl get serverstats  -n funcom-seabass-sh-db3533a2d5a25fb-silakw
 
 # Director NodePort (internal port 11717, nodePort is dynamic)
 sudo kubectl get svc -A -o jsonpath='{.items[*].spec.ports[?(@.port==11717)].nodePort}'
@@ -300,11 +434,22 @@ ps -eo pid,user,rss,vsz,pmem,pcpu,cmd --sort=-rss | head
 /usr/sbin/ss -tulpen
 
 # VPA recommendations (populate after ~24h)
-sudo kubectl get vpa -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
+sudo kubectl get vpa -n funcom-seabass-sh-db3533a2d5a25fb-silakw
 ~/dune-server/scripts/vpa/watch-gameservers.sh --once
 ```
 
 ---
+
+## Planned Reboot / Host Maintenance
+
+Before rebooting the host, cleanly stop Dune through `dune-ctl`:
+
+```sh
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware shutdown --yes
+```
+
+This creates a full backup, patches the selected BattleGroup to stopped, and
+waits for game servers to stop. It does not reboot the host.
 
 ## Boot Sequence (after reboot)
 
@@ -318,10 +463,17 @@ Then manually (or add to rc.local for fully automatic):
 sudo rc-service k3s start
 ```
 
-After k3s is up, maps that were running before the reboot do **not** restart automatically — the BattleGroup CR retains the last replica counts, but the ServerSetScale objects reset to 0. Use `map-toggle.sh start <map>` for each map, or restart the whole battlegroup:
+After k3s is up, start the world and reapply the gateway patch:
+
 ```sh
-~/dune-server/server/scripts/battlegroup.sh restart
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware battlegroup start
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware gateway-patch
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware preflight
 ```
+
+Maps that were running before a reboot may not restart automatically in the
+same shape. Use `dune-ctl --world Ixware maps list` and explicitly start any
+needed travel map such as `DeepDesert_1`.
 
 ---
 
@@ -356,10 +508,24 @@ Official Funcom tiers (from `initial-setup.ps1`):
 | 30 GB | Hagga Basin + Story/Social maps |
 | 40 GB | Hagga Basin + Story/Social + Deep Desert (full) |
 
-Funcom's tiers assume full player load. In practice with a single user:
-- Survival_1 + Overmap are the normal low-footprint set. Survival_1 + DeepDesert_1 + Overmap together previously used ~4.4 Gi RSS with one user, but DeepDesert must be cleanly started/stopped through `map-toggle.sh`.
-- Experimental swap lowers *requests* so Kubernetes schedules pods against available RAM + swap headroom. The gap between request and actual RSS is wide for all maps so far.
-- Do not rely on older blanket claims that k3s/Kubernetes cannot use swap. This host is running a modern k3s client (`v1.36.0+k3s1`) on Slackware with cgroup v1 memory+memsw accounting, zram, and disk-backed swap. Judge swap behavior from live evidence: `swapon --show`, cgroup settings, scheduling behavior, RSS, and actual swap pressure.
+Funcom's tiers assume full player load. With the 64 GB upgrade in place this
+host comfortably runs the Dune + Conan stacks together; the constraints below
+are kept as a reference, not as a live operating envelope.
+
+- Survival_1 + Overmap are the normal low-footprint set. Survival_1 +
+  DeepDesert_1 + Overmap together previously used ~4.4 Gi RSS with one user,
+  and DeepDesert can now run as a live map for travel validation. Start/stop
+  it explicitly through `map-toggle.sh` or `dune-ctl maps`.
+- Experimental swap lowers *requests* so Kubernetes schedules pods against
+  available RAM + swap headroom. The gap between request and actual RSS is
+  wide for all maps so far. After the RAM upgrade these aggressive requests
+  are no longer strictly needed; review with `resource-snapshot.sh` before
+  reverting.
+- Do not rely on older blanket claims that k3s/Kubernetes cannot use swap.
+  This host is running a modern k3s client (`v1.36.0+k3s1`) on Slackware with
+  cgroup v1 memory+memsw accounting, zram, and disk-backed swap. Judge swap
+  behavior from live evidence: `swapon --show`, cgroup settings, scheduling
+  behavior, RSS, and actual swap pressure.
 
 Per-map Kubernetes limits and requests (from `experimental_swap.sh`):
 
@@ -394,7 +560,7 @@ All live in `kube-system`:
 
 ### VPA objects
 
-9 Off-mode VPA objects in `funcom-seabass-sh-db3533a2d5a25fb-xyyxbx`, one per Deployment/StatefulSet, named `vpa-<workload>`. Created by `vpa-objects.sh` (idempotent).
+9 Off-mode VPA objects in `funcom-seabass-sh-db3533a2d5a25fb-silakw`, one per Deployment/StatefulSet, named `vpa-<workload>`. Created by `vpa-objects.sh` (idempotent).
 
 Recommendations appear after ~24 h of data collection and are visible under `.status.recommendation` in each VPA object.
 
@@ -402,11 +568,11 @@ Recommendations appear after ~24 h of data collection and are visible under `.st
 
 ```sh
 # Summary table — MEM column fills in after ~24h
-sudo kubectl get vpa -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
+sudo kubectl get vpa -n funcom-seabass-sh-db3533a2d5a25fb-silakw
 
 # Full recommendation for a specific workload
-sudo kubectl describe vpa vpa-sh-db3533a2d5a25fb-xyyxbx-db-dbdepl-sts \
-  -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
+sudo kubectl describe vpa vpa-sh-db3533a2d5a25fb-silakw-db-dbdepl-sts \
+  -n funcom-seabass-sh-db3533a2d5a25fb-silakw
 ```
 
 ### Monitoring game server memory
@@ -431,14 +597,14 @@ Tuning is done via `experimental_swap.sh`'s `map_to_requests` map or a direct Ba
 ~/dune-server/server/scripts/setup/experimental_swap.sh
 
 # Or patch directly — get the set index first:
-sudo kubectl get battlegroups sh-db3533a2d5a25fb-xyyxbx \
-  -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx -o json \
+sudo kubectl get battlegroups sh-db3533a2d5a25fb-silakw \
+  -n funcom-seabass-sh-db3533a2d5a25fb-silakw -o json \
   | jq -r '.spec.serverGroup.template.spec.sets | to_entries[]
            | "\(.key): \(.value.map) (replicas=\(.value.replicas))"'
 
 # Then patch by index (example: index 0 = Survival_1)
-sudo kubectl patch battlegroup sh-db3533a2d5a25fb-xyyxbx \
-  -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx --type='json' \
+sudo kubectl patch battlegroup sh-db3533a2d5a25fb-silakw \
+  -n funcom-seabass-sh-db3533a2d5a25fb-silakw --type='json' \
   -p='[{"op":"replace","path":"/spec/serverGroup/template/spec/sets/0/resources",
         "value":{"limits":{"memory":"12Gi"},"requests":{"memory":"5Gi"}}}]'
 ```

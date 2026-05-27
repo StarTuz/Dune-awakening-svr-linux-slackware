@@ -1,5 +1,5 @@
 #!/bin/bash
-# Apply --RMQGameHttpPort=30196 to the gateway deployment (idempotent).
+# Apply public RMQ gateway arguments to the gateway deployment (idempotent).
 #
 # The server-operator regenerates the gateway Deployment from the BattleGroup CR
 # on every restart or update, stripping any manual patches.  Run this after
@@ -8,9 +8,11 @@
 # Background: the gateway Python code looks up mq-game-svc NodePorts via the
 # Kubernetes API, finds the amqp port (31982) but not the http port because the
 # port name doesn't match what it expects.  Without this arg it sends
-# GameRmqHttpAddress: "47.145.51.160:None" to FLS.
+# GameRmqHttpAddress: "47.145.31.211:None" to FLS.
 
 set -euo pipefail
+
+RMQ_GAME_HTTP_PORT="${RMQ_GAME_HTTP_PORT:-30196}"
 
 NS=$(sudo kubectl get ns --no-headers -o custom-columns=NAME:.metadata.name \
      | grep "^funcom-seabass-" | head -1)
@@ -49,6 +51,17 @@ echo "Gateway: $GW_DEPLOY"
 echo "Namespace: $NS"
 echo ""
 
+PUBLIC_IP="${PUBLIC_IP:-$(sudo kubectl get battlegroup "$BG" -n "$NS" -o json \
+    | jq -r '.spec.utilities.serverGateway.spec.envVars[]? | select(.name == "HOST_DATACENTER_IP_ADDRESS") | .value' \
+    | head -n1)}"
+if [ -z "$PUBLIC_IP" ] || [ "$PUBLIC_IP" = "null" ]; then
+    echo "ERROR: could not derive HOST_DATACENTER_IP_ADDRESS from BattleGroup $BG." >&2
+    echo "Set PUBLIC_IP=<address> explicitly or fix the BattleGroup spec." >&2
+    exit 1
+fi
+echo "Public IP: $PUBLIC_IP"
+echo ""
+
 if ! sudo kubectl get deployment "$GW_DEPLOY" -n "$NS" >/dev/null 2>&1; then
     echo "Gateway deployment is not present yet; waiting for operator to create it..."
     wait_for_gateway_deploy 180
@@ -56,19 +69,37 @@ if ! sudo kubectl get deployment "$GW_DEPLOY" -n "$NS" >/dev/null 2>&1; then
     echo ""
 fi
 
-if sudo kubectl get deployment "$GW_DEPLOY" -n "$NS" -o json \
-   | jq -e '.spec.template.spec.containers[0].args | any(. == "--RMQGameHttpPort=30196")' \
-   > /dev/null 2>&1; then
-    echo "--RMQGameHttpPort=30196 already present — nothing to do."
+GW_JSON="$(sudo kubectl get deployment "$GW_DEPLOY" -n "$NS" -o json)"
+
+host_idx="$(printf '%s' "$GW_JSON" | jq -r '.spec.template.spec.containers[0].args | to_entries[] | select(.value | startswith("--RMQGameHostname=")) | .key' | head -n1)"
+host_arg="$(printf '%s' "$GW_JSON" | jq -r '.spec.template.spec.containers[0].args[]? | select(startswith("--RMQGameHostname="))' | head -n1)"
+has_http_port="$(printf '%s' "$GW_JSON" | jq -r --arg port "$RMQ_GAME_HTTP_PORT" '.spec.template.spec.containers[0].args | any(. == ("--RMQGameHttpPort=" + $port))')"
+
+patch='[]'
+if [ -n "$host_idx" ] && [ "$host_arg" != "--RMQGameHostname=$PUBLIC_IP" ]; then
+    echo "Patching gateway to set --RMQGameHostname=$PUBLIC_IP ..."
+    patch="$(printf '%s' "$patch" | jq \
+        --arg path "/spec/template/spec/containers/0/args/$host_idx" \
+        --arg value "--RMQGameHostname=$PUBLIC_IP" \
+        '. + [{op:"replace", path:$path, value:$value}]')"
+fi
+
+if [ "$has_http_port" != "true" ]; then
+    echo "Patching gateway to add --RMQGameHttpPort=$RMQ_GAME_HTTP_PORT ..."
+    patch="$(printf '%s' "$patch" | jq \
+        --arg value "--RMQGameHttpPort=$RMQ_GAME_HTTP_PORT" \
+        '. + [{op:"add", path:"/spec/template/spec/containers/0/args/-", value:$value}]')"
+fi
+
+if [ "$patch" = "[]" ]; then
+    echo "--RMQGameHostname=$PUBLIC_IP and --RMQGameHttpPort=$RMQ_GAME_HTTP_PORT already present — nothing to do."
     exit 0
 fi
 
-echo "Patching gateway to add --RMQGameHttpPort=30196 ..."
-sudo kubectl patch deployment "$GW_DEPLOY" -n "$NS" --type='json' \
-  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--RMQGameHttpPort=30196"}]'
+sudo kubectl patch deployment "$GW_DEPLOY" -n "$NS" --type='json' -p="$patch"
 
 echo "Waiting for rollout ..."
 sudo kubectl rollout status deployment/"$GW_DEPLOY" -n "$NS" --timeout=120s
 
 echo ""
-echo "Done. Gateway will send GameRmqHttpAddress: \"47.145.51.160:30196\" to FLS on next start."
+echo "Done. Gateway will send GameRmqAddress: \"$PUBLIC_IP:31982\" and GameRmqHttpAddress: \"$PUBLIC_IP:$RMQ_GAME_HTTP_PORT\" to FLS on next start."

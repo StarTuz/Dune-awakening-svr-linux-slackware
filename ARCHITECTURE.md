@@ -13,7 +13,7 @@ file describes the stable system shape and the control loops that make it work.
 - Kernel: `6.18.27`
 - k3s: `v1.36.0+k3s1`
 - LAN IP: `192.168.254.200`
-- Public IP: `47.145.51.160`
+- Public IP: `47.145.31.211`
 - Co-tenant: Conan Exiles Enhanced server
 - Dune user: `dune`
 - Dune repository and server package: `/home/dune/dune-server`
@@ -38,23 +38,24 @@ on the bare host.
 
 ## Network Path
 
-External clients connect through the Frontier router to arrakis:
+External clients connect through the TP-Link A7 router to arrakis:
 
 ```text
 Internet client
-  -> 47.145.51.160:<Dune port>
-  -> Frontier router port-forward
+  -> 47.145.31.211:<Dune port>
+  -> TP-Link A7 port-forward
   -> 192.168.254.200:<same port>
   -> firewalld/iptables
   -> hostNetwork game server pod
 ```
 
-LAN clients need a hairpin workaround because the Frontier router does not
-reflect LAN traffic back to LAN through the public IP:
+LAN clients connect through the same public FLS/browser path. The TP-Link A7
+has been confirmed to reflect LAN traffic back through the public IP:
 
 ```text
 LAN client
-  -> local OUTPUT DNAT 47.145.51.160 -> 192.168.254.200
+  -> 47.145.31.211:<Dune port>
+  -> TP-Link A7 hairpin/NAT reflection
   -> arrakis firewalld/iptables
   -> hostNetwork game server pod
 ```
@@ -86,7 +87,7 @@ effective public services with:
 ~/dune-server/scripts/security-audit.sh
 ```
 
-The host cannot verify Frontier router forwarding directly; router forwards
+The host cannot verify TP-Link A7 router forwarding directly; router forwards
 still need to be checked in the router UI.
 
 ## k3s Base
@@ -150,11 +151,14 @@ Each battlegroup gets its own namespace:
 funcom-seabass-<battlegroup-id>
 ```
 
-The current namespace is:
+The current active namespace is the Live capsule `Ixware`:
 
 ```text
-funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
+funcom-seabass-sh-db3533a2d5a25fb-silakw
 ```
+
+The cold PTC capsule `Slackware-Arrakis` reserves the namespace
+`funcom-seabass-sh-db3533a2d5a25fb-xyyxbx` but is not currently running.
 
 Operationally, treat the model as three layers:
 
@@ -297,11 +301,12 @@ Client
   -> connects by UDP to the game server pod's hostNetwork port
 ```
 
-For the LAN client on `defiant`, the travel grant still uses the public IP, so
-defiant rewrites outbound traffic locally:
+For the LAN client on `defiant`, the old Steam launcher override
+`-ConnectToIP=192.168.254.200:7784` has been removed. Travel grants use the
+public IP and the TP-Link A7 handles the local reflection:
 
 ```text
-47.145.51.160 -> 192.168.254.200
+47.145.31.211:<Dune port> -> 192.168.254.200:<same port>
 ```
 
 If travel hangs, check the active target port from `BattleGroup.status.servers`,
@@ -377,8 +382,8 @@ The live deployment diverges from Funcom's expected VM in these ways:
 - SteamCMD update flow includes a local pre-fetch/validate step.
 - Funcom script patches are maintained in `scripts/funcom-patches/`.
 - Gateway deployment needs a local RMQ HTTP port patch after regeneration.
-- LAN client needs local OUTPUT DNAT because the Frontier router lacks hairpin
-  NAT.
+- TP-Link A7 provides NAT hairpin for LAN clients; the old local OUTPUT DNAT
+  workaround is historical fallback only.
 - The local update wrapper adds safety around Funcom's update flow: backup,
   stop, double patch re-application, DB credential verification/repair, and
   gateway patch. This is intentionally more conservative than invoking

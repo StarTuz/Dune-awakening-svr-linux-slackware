@@ -1,6 +1,6 @@
 # Dune Server Setup — Status
 
-Last updated: 2026-05-18 — dune-ctl phases 1–4 complete (logs, backup/restore, admin settings, players); backup schedule installed; TUI tabs 5–6 live
+Last updated: 2026-05-26 — active capsule is now the Live world `Ixware` (`sh-db3533a2d5a25fb-silakw`). PTC capsule `Slackware-Arrakis` (`sh-db3533a2d5a25fb-xyyxbx`) is configured but cold. Earlier sections of this document still describe PTC-era validation and remain useful as history.
 
 ## Current state ✅
 
@@ -10,12 +10,10 @@ Last updated: 2026-05-18 — dune-ctl phases 1–4 complete (logs, backup/restor
 | kube-system | vpa-recommender (Off mode, memory only) | Running |
 | cert-manager | cert-manager, cainjector, webhook | Running |
 | funcom-operators | battlegroupoperator, databaseoperator, serveroperator, utilitiesoperator | Running |
-| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | postgres, rabbitmq, gateway, director, text-router, filebrowser | Running |
-| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | Survival_1 | Running (~3.5 Gi RSS, 5 Gi req / 12 Gi limit) |
-| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | Overmap | Running (~120 Mi RSS, 200 Mi req / 1 Gi limit, swap-backed) |
-| funcom-seabass-sh-db3533a2d5a25fb-xyyxbx | DeepDesert_1 | Running when validating travel/load behavior (~2.0 Gi RSS, 3 Gi req / 10 Gi limit) |
+| funcom-seabass-sh-db3533a2d5a25fb-silakw | postgres, rabbitmq, gateway, director, text-router, filebrowser | Running |
+| funcom-seabass-sh-db3533a2d5a25fb-silakw | Survival_1 + Overmap | Running (Live capsule; DeepDesert_1 started on demand) |
 
-Battlegroup: `sh-db3533a2d5a25fb-xyyxbx` ("Slackware-Arrakis"), Phase: Healthy
+Active battlegroup: `sh-db3533a2d5a25fb-silakw` ("Ixware", Live, region North America), Phase: Healthy (verified `kubectl get battlegroups -A` 2026-05-26, ~7d age, 8h uptime).
 
 Security audit state:
 
@@ -23,7 +21,12 @@ Security audit state:
 - Director, Filebrowser, Postgres, k3s API, and RabbitMQ admin ports stay private behind the host firewall.
 - The audit is still useful after every gateway or update change, because Funcom patches can regenerate the gateway deployment and shift what is exposed.
 
-## FLS server browser ✅ visible (as of 2026-05-14)
+## FLS server browser (PTC-era history)
+
+> **Historical** — this section describes validation of the **PTC** world
+> `Slackware-Arrakis` in May 2026, before the Live `Ixware` cutover. Live
+> browser visibility under the official self-hosted browser tab should be
+> re-validated independently rather than inherited from these notes.
 
 "Slackware-Arrakis" appears in the EXPERIMENTAL browser tab with "Arrakis-SlackwareLinux" (password-protected) below it. The "0 ms" ping shown is a Funcom-side display anomaly affecting every server in the list, not specific to ours.
 
@@ -37,11 +40,11 @@ Probable mechanism: FLS rejects outdated builds from the browser to prevent play
 
 ### What was found and fixed
 
-**`GameRmqHttpAddress: "47.145.51.160:None"` (fixed 2026-05-14)**
+**`GameRmqHttpAddress: "47.145.31.211:None"` (fixed 2026-05-14)**
 
-The gateway's Python service discovers RabbitMQ NodePorts via the Kubernetes API. It successfully found the `amqp` port (NodePort 31982) but not the `http` port (NodePort 30196) because the port name in the service doesn't match what the code expects. This caused every `GatewayDeclareFarmStatus` FLS call to send `GameRmqHttpAddress: "47.145.51.160:None"`.
+The gateway's Python service discovers RabbitMQ NodePorts via the Kubernetes API. It successfully found the `amqp` port (NodePort 31982) but not the `http` port (NodePort 30196) because the port name in the service doesn't match what the code expects. This caused every `GatewayDeclareFarmStatus` FLS call to send `GameRmqHttpAddress: "47.145.31.211:None"`.
 
-Fix: added `--RMQGameHttpPort=30196` to the gateway Deployment args via JSON patch. The gateway now sends `GameRmqHttpAddress: "47.145.51.160:30196"` correctly.
+Fix: added `--RMQGameHttpPort=30196` to the gateway Deployment args via JSON patch. The gateway now sends `GameRmqHttpAddress: "47.145.31.211:30196"` correctly.
 
 **Caveat**: this patch is applied to the Deployment directly. The server-operator regenerates the gateway Deployment from the BattleGroup CR on every restart or update, wiping the patch. Scripts exist to re-apply it:
 
@@ -60,8 +63,8 @@ Fix: added `--RMQGameHttpPort=30196` to the gateway Deployment args via JSON pat
 | Router port forwarding UDP 7782-7790 | ✅ confirmed in place |
 | Router port forwarding TCP 31982 (RMQ AMQP NodePort) | ✅ confirmed in place |
 | `DatacenterId` / `-FarmRegion=` / director env var all set to `"North America Test"` | ✅ |
-| `GameRmqAddress: "47.145.51.160:31982"` | ✅ |
-| `GameRmqHttpAddress: "47.145.51.160:30196"` | ✅ (fixed 2026-05-14) |
+| `GameRmqAddress: "47.145.31.211:31982"` | ✅ |
+| `GameRmqHttpAddress: "47.145.31.211:30196"` | ✅ (fixed 2026-05-14) |
 | Survival_1 declared to FLS (`DeclareBattlegroupUpdates` with UpDeclarations, partition 1) | ✅ |
 | 8-hour heartbeat firing (`HeartbeatUpdatesByPartitionId`) | ✅ (confirmed 13:46 UTC 2026-05-14) |
 
@@ -74,6 +77,26 @@ Fix: added `--RMQGameHttpPort=30196` to the gateway Deployment args via JSON pat
 3. **`HeartbeatUpdatesByPartitionId`** — director, every 8 hours (`FlsServerHeartbeatUpdateFrequencySeconds=28800`). Refreshes the declaration to prevent expiry.
 
 **Note on Overmap**: The director pre-loads Overmap's server ID from the `world_partition` DB at startup, so it never sees a DOWN→UP transition and never sends an `UpDeclaration` for it. This is expected — `IsStartingMap: false` for Overmap, so FLS only needs Survival_1 for browser visibility.
+
+## Planned reboot / host maintenance
+
+Use the clean Dune shutdown command before rebooting the host:
+
+```sh
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware shutdown --yes
+```
+
+This takes a full backup, patches the BattleGroup to stopped, then waits for
+game servers to stop. It does not reboot the host. After boot, start the world
+and reapply the gateway patch:
+
+```sh
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware battlegroup start
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware gateway-patch
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware preflight
+```
+
+The TUI Dashboard exposes the same workflow on `Q` with confirmation.
 
 ## How to update
 
@@ -161,9 +184,14 @@ VPA 1.6.0 recommender deployed 2026-05-13. Off mode — recommendations only, no
 
 **Standard workloads** (9 VPA objects): postgres, rabbitmq, gateway, director, text-router, filebrowser, db-util-mon, db-util-pghero, bgd-deploy. Recommendations populate after ~24h.
 
+VPA objects were created against the PTC namespace. Re-run
+`scripts/vpa/vpa-objects.sh` to create the equivalent Off-mode objects under
+the active Live namespace `funcom-seabass-sh-db3533a2d5a25fb-silakw` when
+recommendations on the live workloads are wanted.
+
 ```sh
-sudo kubectl get vpa -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
-sudo kubectl describe vpa <name> -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx
+sudo kubectl get vpa -n funcom-seabass-sh-db3533a2d5a25fb-silakw
+sudo kubectl describe vpa <name> -n funcom-seabass-sh-db3533a2d5a25fb-silakw
 ```
 
 **Game servers** use Funcom's ServerSet CRD — VPA can't target them. Use `watch-gameservers.sh`:
@@ -187,54 +215,57 @@ All items applied. Details in CLAUDE.md § Security.
 | k3s API `bind-address: 127.0.0.1` | ❌ REVERTED — breaks pod→API DNAT; firewall is sufficient |
 | SNMP disabled | ✅ off |
 | FLS token expiry tracking | ✅ in dune-ctl (`token-check`); token expires 2027-05-08, rotate by 2027-04-08 |
-| dune-ctl world targeting | ✅ `worlds list`, `--world`, and per-world settings profiles for PTC/official cutover |
+| dune-ctl world targeting | ✅ `worlds list`, `--world`, and per-world settings profiles; used to cut over PTC→Live |
 | dune-ctl primary Sietch lifecycle | ✅ `sietches list/start/stop/restart`; start/stop/restart currently map to selected BattleGroup lifecycle |
 | dune-ctl Sietch settings workflow | ✅ TUI shows name/password state and setting drift; `settings status` summarizes local-vs-deployed changes; `settings pull` syncs deployed User*.ini to local; `settings apply`/`apply-restart` require `--force` while drift exists |
 | dune-ctl preflight | ✅ `preflight` checks firewall backend, gateway patch, FLS token, primary Sietch, settings drift, and RAM; `--strict` fails on warnings |
-| Slackware-Arrakis settings profile | ✅ per-world profile initialized at `~/.dune/worlds/sh-db3533a2d5a25fb-xyyxbx/UserSettings`; deployed `User*.ini` pulled locally; managed drift clean |
+| Per-world settings profiles | ✅ Live: `~/.dune/worlds/sh-db3533a2d5a25fb-silakw/UserSettings`; PTC (cold): `~/.dune/worlds/sh-db3533a2d5a25fb-xyyxbx/UserSettings` |
 
-## Future official launch cutover
+## Live cutover (completed)
 
-The current `Slackware-Arrakis` world is a PTC/Experimental BattleGroup. When
-Funcom launches official self-hosting, create a new official world/BattleGroup
-with a new token instead of mutating the PTC world in place.
+The PTC/Experimental world `Slackware-Arrakis` was the original battlegroup
+under self-host PTC. With Funcom's official self-hosting launch the Live
+capsule `Ixware` (`sh-db3533a2d5a25fb-silakw`, app `4754530`) was stood up as
+a separate capsule and is now the active battlegroup. The PTC capsule is cold
+on disk under `~/.dune/capsules/ptc/sh-db3533a2d5a25fb-xyyxbx/`.
 
-Planned sequence:
+Sequence used:
 
 ```sh
-# See local PTC/official world specs
-~/dune-server/dune-ctl/target/debug/dune-ctl worlds list
+# Inspect available capsules
+~/dune-server/dune-ctl/target/release/dune-ctl worlds list
 
-# After official world creation, isolate its local UserSettings profile
-~/dune-server/dune-ctl/target/debug/dune-ctl --world <official-bg> worlds init-settings
+# Initialize per-world UserSettings for the Live capsule
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware worlds init-settings
 
-# Verify the official world target
-~/dune-server/dune-ctl/target/debug/dune-ctl --world <official-bg> status
+# Verify the Live world target
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware status
 
-# Power down the PTC world after official validation
-~/dune-server/dune-ctl/target/debug/dune-ctl --world sh-db3533a2d5a25fb-xyyxbx sietches stop
+# Stop the PTC world (already done)
+~/dune-server/dune-ctl/target/release/dune-ctl --world Slackware-Arrakis sietches stop
 ```
 
-Do not run both PTC and official worlds live on this 16 GiB host without a port
-and memory plan. Multiple BattleGroups duplicate DB/RMQ/director/gateway stacks
-and can collide on public NodePorts unless templates are adjusted before start.
+PTC and Live are cold-swap capsules and **must not run simultaneously** — they
+use different operator image tags and would collide on cluster-wide NodePorts,
+CRDs, and host firewall rules. See `WORLD-CAPSULES.md`.
 
-## LAN client workaround (defiant / 192.168.254.17)
+## LAN client hairpin status (defiant / 192.168.254.17)
 
-The Frontier NVG468MQ router does not support NAT hairpin. LAN clients connecting
-via the FLS browser hang because the external IP (47.145.51.160) is unreachable
-from inside the LAN through the router.
+The old Frontier NVG468MQ router did not support NAT hairpin. After replacing it
+with a TP-Link A7 and moving to external IP `47.145.31.211`, LAN login through
+the normal FLS/browser path works. The old Steam launcher
+`-ConnectToIP=192.168.254.200:7784` override was removed.
 
-Fix applied on defiant via firewalld direct rule (nat OUTPUT DNAT):
+Historical fallback if hairpin breaks again:
 
 ```sh
 sudo firewall-cmd --permanent --direct --add-rule ipv4 nat OUTPUT 0 \
-    -d 47.145.51.160 -j DNAT --to-destination 192.168.254.200
+    -d 47.145.31.211 -j DNAT --to-destination 192.168.254.200
 sudo firewall-cmd --reload
 ```
 
-Any other LAN client that wants to connect needs the same rule (or equivalent
-iptables/nftables OUTPUT DNAT). The rule is permanent and survives reboots.
+Any LAN client can use the same rule (or equivalent iptables/nftables OUTPUT
+DNAT) if a future router or firmware change breaks hairpin behavior.
 
 ## Hagga Basin travel timeout — root cause and status
 
@@ -306,7 +337,7 @@ Both `scripts/map-toggle.sh` and `dune-ctl/core/src/maps.rs` were updated so `st
 - [x] Schedule Dune backup jobs writing to `/srv/backups/dune/` — `dune-ctl backup schedule` installs nightly cron at 03:00, keeps 14
 - [ ] Set up Conan backup jobs writing to `/srv/backups/conan/`
 - [ ] Off-server backup strategy (rsync to NAS / rclone to cloud — TBD)
-- [ ] Create `settings.conf` (`printf '\n\n\n47.145.51.160\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
+- [ ] Create `settings.conf` (`printf '\n\n\n47.145.31.211\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
 - [ ] **Rotate FLS token before 2027-04-08** (expires 2027-05-08) — update BattleGroup CR args (28 occurrences) + re-apply gateway patch
 - [ ] **Set sietch password before official launch** — no password is set (fine for PTC; FLS browser not widely used yet). At official release the server is publicly visible to all players. Set with `dune-ctl settings set sietch_password <password> && dune-ctl settings apply` before going live on the official world.
 - [x] dune-ctl operational polish — world targeting, primary Sietch lifecycle,
@@ -349,6 +380,15 @@ The Funcom scripts assume a cloud-provisioned base — these were done manually:
 
 ## Boot sequence (on reboot)
 
+Before rebooting the host, run:
+
+```sh
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware shutdown --yes
+```
+
+This backs up the world, stops the BattleGroup, and waits for game servers to
+stop. It does not reboot the host.
+
 rc.local starts automatically:
 1. firewalld
 2. QEMU guest agent
@@ -359,16 +399,15 @@ Then manually:
 sudo rc-service k3s start
 ```
 
-After k3s is up, maps do not restart automatically. Start them, then re-apply the gateway patch:
+After k3s is up, start the world and re-apply the gateway patch:
+
 ```sh
-~/dune-server/server/scripts/battlegroup.sh restart
-~/dune-server/scripts/gateway-patch.sh
-# or start maps individually:
-~/dune-server/scripts/map-toggle.sh start Survival_1
-~/dune-server/scripts/map-toggle.sh start Overmap
-~/dune-server/scripts/map-toggle.sh start DeepDesert_1
-~/dune-server/scripts/gateway-patch.sh
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware battlegroup start
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware gateway-patch
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware preflight
 ```
+
+Then check maps and explicitly start any on-demand travel maps that are needed.
 
 ## Key paths
 
@@ -384,7 +423,8 @@ After k3s is up, maps do not restart automatically. Start them, then re-apply th
 | Scheduler daemon | `~/dune-server/scripts/memory-focused-scheduler.sh` |
 | Scheduler log | `~/dune-server/logs/memory-focused-scheduler.log` |
 | k3s log | `~/dune-server/logs/k3s.log` |
-| World config | `~/.dune/sh-db3533a2d5a25fb-xyyxbx.yaml` |
+| Active world config (Live capsule) | `~/.dune/capsules/live/sh-db3533a2d5a25fb-silakw/{capsule.env,battlegroup.yaml}` |
+| Cold PTC world config | `~/.dune/sh-db3533a2d5a25fb-xyyxbx.yaml` |
 | DOWNLOAD_PATH | `~/.dune/download` → `~/dune-server/server/` |
 | Dune backups | `/srv/backups/dune/` |
 | Conan backups | `/srv/backups/conan/` |

@@ -12,6 +12,7 @@ Common paths for the native Slackware Dune: Awakening deployment.
 | Windows package reference | `/home/dune/steamcmd/dune_server` |
 | SteamCMD | `/home/dune/steamcmd/steamcmd.sh` |
 | Rust control tool | `/home/dune/dune-server/dune-ctl` |
+| Release `dune-ctl` binary | `/home/dune/dune-server/dune-ctl/target/release/dune-ctl` |
 | Debug `dune-ctl` binary | `/home/dune/dune-server/dune-ctl/target/debug/dune-ctl` |
 | TUI mascot design note | `/home/dune/dune-server/dune-ctl/TUI-MASCOT.md` |
 
@@ -22,6 +23,8 @@ Common paths for the native Slackware Dune: Awakening deployment.
 | Quick overview | `/home/dune/dune-server/README.md` |
 | Current operational state | `/home/dune/dune-server/STATUS.md` |
 | Architecture | `/home/dune/dune-server/ARCHITECTURE.md` |
+| Future installer design | `/home/dune/dune-server/INSTALLER-DESIGN.md` |
+| Public IP runbook | `/home/dune/dune-server/PUBLIC-IP.md` |
 | File index | `/home/dune/dune-server/FILE-LOCATIONS.md` |
 | Agent/operator guidance | `/home/dune/dune-server/CLAUDE.md` |
 
@@ -66,24 +69,33 @@ Common paths for the native Slackware Dune: Awakening deployment.
 | Item | Path |
 |---|---|
 | Dune home config | `/home/dune/.dune` |
-| World config YAML | `/home/dune/.dune/sh-db3533a2d5a25fb-xyyxbx.yaml` |
-| FLS secret YAML | `/home/dune/.dune/sh-db3533a2d5a25fb-xyyxbx-fls-secret.yaml` |
-| RMQ secret YAML | `/home/dune/.dune/sh-db3533a2d5a25fb-xyyxbx-rmq-secret.yaml` |
-| Per-world settings root | `/home/dune/.dune/worlds` |
+| Capsule storage root | `/home/dune/.dune/capsules` |
+| Ixware (Live, active) capsule dir | `/home/dune/.dune/capsules/live/sh-db3533a2d5a25fb-silakw` |
+| Ixware capsule env / spec | `/home/dune/.dune/capsules/live/sh-db3533a2d5a25fb-silakw/{capsule.env,battlegroup.yaml}` |
+| Ixware FLS secret YAML | `/home/dune/.dune/sh-db3533a2d5a25fb-silakw-fls-secret.yaml` |
+| Ixware RMQ secret YAML | `/home/dune/.dune/sh-db3533a2d5a25fb-silakw-rmq-secret.yaml` |
+| Ixware settings profile | `/home/dune/.dune/worlds/sh-db3533a2d5a25fb-silakw/UserSettings` |
+| Ixware UserEngine.ini | `/home/dune/.dune/worlds/sh-db3533a2d5a25fb-silakw/UserSettings/UserEngine.ini` |
+| Ixware UserGame.ini | `/home/dune/.dune/worlds/sh-db3533a2d5a25fb-silakw/UserSettings/UserGame.ini` |
+| Slackware-Arrakis (PTC, cold) world spec | `/home/dune/.dune/sh-db3533a2d5a25fb-xyyxbx.yaml` |
+| Slackware-Arrakis FLS secret YAML | `/home/dune/.dune/sh-db3533a2d5a25fb-xyyxbx-fls-secret.yaml` |
+| Slackware-Arrakis RMQ secret YAML | `/home/dune/.dune/sh-db3533a2d5a25fb-xyyxbx-rmq-secret.yaml` |
 | Slackware-Arrakis settings profile | `/home/dune/.dune/worlds/sh-db3533a2d5a25fb-xyyxbx/UserSettings` |
 | Slackware-Arrakis UserEngine.ini | `/home/dune/.dune/worlds/sh-db3533a2d5a25fb-xyyxbx/UserSettings/UserEngine.ini` |
 | Slackware-Arrakis UserGame.ini | `/home/dune/.dune/worlds/sh-db3533a2d5a25fb-xyyxbx/UserSettings/UserGame.ini` |
+| Live package root | `/home/dune/dune-packages/live/app-4754530/server` |
 | Optional Windows-style settings file | `/home/dune/.dune/settings.conf` |
 
 The YAML files under `/home/dune/.dune` contain secrets and should remain mode
 `600`.
 
 The per-world `UserSettings` profile is the active local source for
-`dune-ctl --world Slackware-Arrakis settings ...`. It was initialized from the
-deployed `/srv/UserSettings` copy and should normally report clean drift via:
+`dune-ctl --world <world> settings ...`. The active Live profile (`Ixware`)
+was initialized from the deployed `/srv/UserSettings` copy and should
+normally report clean drift via:
 
 ```sh
-~/dune-server/dune-ctl/target/debug/dune-ctl --world Slackware-Arrakis settings status
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware settings status
 ```
 
 ## Kubernetes and k3s

@@ -330,9 +330,10 @@ Preferred drill, no live-world data loss:
 Do not create a second full BattleGroup from the stock Funcom
 `world-template.yaml` on this host without editing the template first. The
 template pins the game RabbitMQ NodePort to `31982`, which collides with the
-live `Slackware-Arrakis` battlegroup. Use an isolated Postgres scratch restore
-for dump validation, or create the full disposable world on a separate k3s
-host/VM or with audited port changes.
+currently-active Live battlegroup (`Ixware` / `sh-db3533a2d5a25fb-silakw`) and
+with the cold PTC capsule's reserved NodePort. Use an isolated Postgres
+scratch restore for dump validation, or create the full disposable world on a
+separate k3s host/VM or with audited port changes.
 
 1. Create a fresh full backup:
 

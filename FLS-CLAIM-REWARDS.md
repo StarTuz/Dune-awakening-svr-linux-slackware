@@ -97,13 +97,13 @@ That investigation can stay paused until there's a concrete need.
 
 ```sh
 # Verify no entitlement endpoints fire from director:
-sudo kubectl logs -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx \
-  sh-db3533a2d5a25fb-xyyxbx-bgd-deploy-... --tail=2000 \
+sudo kubectl logs -n funcom-seabass-sh-db3533a2d5a25fb-silakw \
+  sh-db3533a2d5a25fb-silakw-bgd-deploy-... --tail=2000 \
   | grep -oE 'api/[A-Za-z_]+' | sort -u
 
 # Inspect game pod save layout (no Mail/Reward dir; state is in Postgres):
-sudo kubectl exec -n funcom-seabass-sh-db3533a2d5a25fb-xyyxbx \
-  sh-db3533a2d5a25fb-xyyxbx-sg-survival-1-pod-1 -- \
+sudo kubectl exec -n funcom-seabass-sh-db3533a2d5a25fb-silakw \
+  sh-db3533a2d5a25fb-silakw-sg-survival-1-pod-1 -- \
   ls -la /home/dune/server/DuneSandbox/Saved/
 
 # List Funcom CRDs (nothing reward/entitle/mail-shaped):

@@ -216,7 +216,7 @@ for spec in \
 done
 
 section "router reminder"
-info "This host can verify firewalld, not Frontier router forwards. Router should expose only Dune UDP 7782-7790 and RMQ game TCP 31982/30196 unless intentionally changed."
+info "This host can verify firewalld, not TP-Link A7 router forwards. Router should expose only Dune UDP 7782-7790 and RMQ game TCP 31982/30196 unless intentionally changed."
 
 section "summary"
 if [ "$critical" -gt 0 ]; then
