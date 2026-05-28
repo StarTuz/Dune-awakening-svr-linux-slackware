@@ -18,7 +18,7 @@ Doc index:
 - `INSTALLER-DESIGN.md` — future cross-distro installer direction
 - `dune-ctl/OPERATIONS.md` — full `dune-ctl` CLI/TUI reference
 
-**Current state**: Fully running on 64 GB RAM (motherboard upgrade applied 2026-05-17, ~58.9 GB usable). Security hardening applied 2026-05-14; Hagga Basin travel fixed 2026-05-15. The **Live** world `Ixware` (`sh-db3533a2d5a25fb-silakw`, namespace `funcom-seabass-sh-db3533a2d5a25fb-silakw`) is the active capsule; the PTC capsule `Slackware-Arrakis` (`sh-db3533a2d5a25fb-xyyxbx`) is configured but cold. Survival_1 + Overmap run continuously; DeepDesert_1 can run alongside them and is started/stopped explicitly via `map-toggle.sh` or `dune-ctl maps`. Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB headroom (zram + dune-vg SSD + sdc1). VPA recommender live (Off mode, memory only). FLS token expires 2027-05-08 — rotate by 2027-04-08.
+**Current state**: Fully running on 64 GB RAM (motherboard upgrade applied 2026-05-17, ~58.9 GB usable). Security hardening applied 2026-05-14; Hagga Basin travel fixed 2026-05-15. The **Live** world `Ixware` (`sh-db3533a2d5a25fb-silakw`, namespace `funcom-seabass-sh-db3533a2d5a25fb-silakw`) is the active capsule; the PTC capsule `Slackware-Arrakis` (`sh-db3533a2d5a25fb-xyyxbx`) is configured but cold. Survival_1 + Overmap run continuously; DeepDesert_1 can run alongside them and is started/stopped explicitly via `map-toggle.sh` or `dune-ctl maps`. Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB headroom (zram + dune-vg SSD + sdc1). VPA recommender live (Off mode, memory only). FLS token expires 2027-05-19 — rotate by 2027-04-19.
 
 ---
 
@@ -316,7 +316,7 @@ The FLS JWT is in each BattleGroup CR set's `arguments` array, in the form:
 ```
 -ini:engine:[FuncomLiveServices]:ServiceAuthToken=<jwt>
 ```
-It appears 28 times (once per map set). **Current token expires 2027-05-08. Rotate by 2027-04-08.**
+It appears 28 times (once per map set). **Current token expires 2027-05-19. Rotate by 2027-04-19.**
 
 Check expiry at any time: `~/dune-server/dune-ctl/target/release/dune-ctl token-check`
 

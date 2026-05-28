@@ -819,7 +819,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
     let hint = match app.view {
         View::Worlds => "[↑/↓] select world  [I] init profile  [r] refresh  [q] quit",
         View::Dashboard => {
-            "[Tab/3] maps  [A/Z/R] primary sietch  [Q] clean shutdown  [u] update  [g] gateway  [r] refresh"
+            "[A] start world  [Z] stop world  [R] restart  [Q] clean shutdown  [u] update  [g] gateway  [r] refresh"
         }
         View::Maps => "[Tab/4] settings  [s/x] map start/stop  [r] refresh  [q] quit",
         View::Settings => {

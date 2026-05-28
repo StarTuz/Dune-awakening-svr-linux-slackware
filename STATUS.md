@@ -214,7 +214,7 @@ All items applied. Details in CLAUDE.md § Security.
 | PostgreSQL passwords rotated | ✅ ALTER USER applied; CR + on-disk YAML updated |
 | k3s API `bind-address: 127.0.0.1` | ❌ REVERTED — breaks pod→API DNAT; firewall is sufficient |
 | SNMP disabled | ✅ off |
-| FLS token expiry tracking | ✅ in dune-ctl (`token-check`); token expires 2027-05-08, rotate by 2027-04-08 |
+| FLS token expiry tracking | ✅ in dune-ctl (`token-check`); token expires 2027-05-19, rotate by 2027-04-19 |
 | dune-ctl world targeting | ✅ `worlds list`, `--world`, and per-world settings profiles; used to cut over PTC→Live |
 | dune-ctl primary Sietch lifecycle | ✅ `sietches list/start/stop/restart`; start/stop/restart currently map to selected BattleGroup lifecycle |
 | dune-ctl Sietch settings workflow | ✅ TUI shows name/password state and setting drift; `settings status` summarizes local-vs-deployed changes; `settings pull` syncs deployed User*.ini to local; `settings apply`/`apply-restart` require `--force` while drift exists |
@@ -338,7 +338,7 @@ Both `scripts/map-toggle.sh` and `dune-ctl/core/src/maps.rs` were updated so `st
 - [ ] Set up Conan backup jobs writing to `/srv/backups/conan/`
 - [ ] Off-server backup strategy (rsync to NAS / rclone to cloud — TBD)
 - [ ] Create `settings.conf` (`printf '\n\n\n47.145.31.211\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
-- [ ] **Rotate FLS token before 2027-04-08** (expires 2027-05-08) — update BattleGroup CR args (28 occurrences) + re-apply gateway patch
+- [ ] **Rotate FLS token before 2027-04-19** (expires 2027-05-19) — update BattleGroup CR args (28 occurrences) + re-apply gateway patch
 - [ ] **Set sietch password before official launch** — no password is set (fine for PTC; FLS browser not widely used yet). At official release the server is publicly visible to all players. Set with `dune-ctl settings set sietch_password <password> && dune-ctl settings apply` before going live on the official world.
 - [x] dune-ctl operational polish — world targeting, primary Sietch lifecycle,
   settings drift guard, per-world settings profile, and TUI settings polish are

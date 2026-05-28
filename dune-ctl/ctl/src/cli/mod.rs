@@ -998,15 +998,19 @@ async fn cmd_battlegroup(action: BattlegroupCommand, cfg: &Config) -> Result<()>
 }
 
 async fn cmd_diagnostics(cfg: &Config) -> Result<()> {
-    let snap = HealthSnapshot::collect(cfg).await?;
+    let diagnostics = dune_ctl_core::diagnostics::DiagnosticsSnapshot::collect().await;
     println!("Diagnostics for {}", cfg.battlegroup);
-    print_check("firewall backend", &snap.diagnostics.firewall_backend);
-    if let Some(gw) = &snap.gateway {
-        println!(
-            "{:<22} {}",
-            "gateway patch",
-            if gw.patched { "ok" } else { "missing" }
-        );
+    print_check("k3s API", &diagnostics.k3s_api);
+    print_check("firewall backend", &diagnostics.firewall_backend);
+    if diagnostics.k3s_api.state == CheckState::Ok {
+        match gateway::status(cfg).await {
+            Ok(gw) => println!(
+                "{:<22} {}",
+                "gateway patch",
+                if gw.patched { "ok" } else { "missing" }
+            ),
+            Err(e) => println!("{:<22} unavailable {}", "gateway patch", e),
+        }
     }
     Ok(())
 }
@@ -1071,27 +1075,55 @@ impl PreflightRow {
 }
 
 async fn cmd_preflight(cfg: &Config, strict: bool) -> Result<()> {
-    let snap = HealthSnapshot::collect(cfg).await?;
+    let diagnostics = dune_ctl_core::diagnostics::DiagnosticsSnapshot::collect().await;
     let mut rows = Vec::new();
 
-    rows.push(match snap.diagnostics.firewall_backend.state {
-        CheckState::Ok => PreflightRow::ok(
-            "firewall backend",
-            &snap.diagnostics.firewall_backend.message,
-        ),
-        CheckState::Warning => PreflightRow::warn(
-            "firewall backend",
-            &snap.diagnostics.firewall_backend.message,
-        ),
-        CheckState::Critical => PreflightRow::fail(
-            "firewall backend",
-            &snap.diagnostics.firewall_backend.message,
-        ),
-        CheckState::Unknown => PreflightRow::warn(
-            "firewall backend",
-            &snap.diagnostics.firewall_backend.message,
-        ),
+    rows.push(match diagnostics.k3s_api.state {
+        CheckState::Ok => PreflightRow::ok("k3s API", &diagnostics.k3s_api.message),
+        CheckState::Warning => PreflightRow::warn("k3s API", &diagnostics.k3s_api.message),
+        CheckState::Critical => PreflightRow::fail("k3s API", &diagnostics.k3s_api.message),
+        CheckState::Unknown => PreflightRow::warn("k3s API", &diagnostics.k3s_api.message),
     });
+
+    rows.push(match diagnostics.firewall_backend.state {
+        CheckState::Ok => {
+            PreflightRow::ok("firewall backend", &diagnostics.firewall_backend.message)
+        }
+        CheckState::Warning => {
+            PreflightRow::warn("firewall backend", &diagnostics.firewall_backend.message)
+        }
+        CheckState::Critical => {
+            PreflightRow::fail("firewall backend", &diagnostics.firewall_backend.message)
+        }
+        CheckState::Unknown => {
+            PreflightRow::warn("firewall backend", &diagnostics.firewall_backend.message)
+        }
+    });
+
+    rows.push(if cfg.has_capsule() {
+        PreflightRow::ok(
+            "capsule target",
+            format!(
+                "{} capsule selected ({})",
+                cfg.backup_environment,
+                cfg.capsule_dir().display()
+            ),
+        )
+    } else if cfg.world_spec.is_some() {
+        PreflightRow::warn(
+            "capsule target",
+            "legacy world spec selected; no capsule metadata found",
+        )
+    } else {
+        PreflightRow::fail("capsule target", "no world spec or capsule metadata found")
+    });
+
+    if diagnostics.k3s_api.state == CheckState::Critical {
+        print_preflight_rows(cfg, &rows, strict)?;
+        anyhow::bail!("preflight failed");
+    }
+
+    let snap = HealthSnapshot::collect(cfg).await?;
 
     rows.push(match &snap.gateway {
         Some(gateway) if gateway.patched => {
@@ -1130,6 +1162,50 @@ async fn cmd_preflight(cfg: &Config, strict: bool) -> Result<()> {
         },
         None => PreflightRow::warn("FLS token", "token status unavailable"),
     });
+
+    rows.push(
+        match (
+            snap.battlegroup_stopped,
+            snap.battlegroup_phase.as_str(),
+            snap.sietches.iter().find(|sietch| sietch.primary),
+        ) {
+            (true, phase, _) => PreflightRow::warn(
+                "server start",
+                format!("battlegroup is stopped; phase {}", phase),
+            ),
+            (false, "Healthy", Some(sietch))
+                if sietch.phase == "Running"
+                    && sietch.ready_replicas.unwrap_or_default() > 0
+                    && sietch.consistency == battlegroup::MapConsistency::CleanOn =>
+            {
+                PreflightRow::ok(
+                    "server start",
+                    format!(
+                        "healthy; {} ready {}/{}",
+                        sietch.map,
+                        opt_u32(sietch.ready_replicas),
+                        opt_u32(sietch.target_replicas)
+                    ),
+                )
+            }
+            (false, phase, Some(sietch)) => PreflightRow::warn(
+                "server start",
+                format!(
+                    "phase {}; {} {} ready {}/{} state {}",
+                    phase,
+                    sietch.map,
+                    sietch.phase,
+                    opt_u32(sietch.ready_replicas),
+                    opt_u32(sietch.target_replicas),
+                    sietch.consistency.label()
+                ),
+            ),
+            (false, phase, None) => PreflightRow::fail(
+                "server start",
+                format!("phase {}; primary Sietch missing", phase),
+            ),
+        },
+    );
 
     rows.push(match snap.sietches.iter().find(|sietch| sietch.primary) {
         Some(sietch)
@@ -1183,11 +1259,15 @@ async fn cmd_preflight(cfg: &Config, strict: bool) -> Result<()> {
         _ => PreflightRow::warn("RAM", "memory status unavailable"),
     });
 
+    print_preflight_rows(cfg, &rows, strict)
+}
+
+fn print_preflight_rows(cfg: &Config, rows: &[PreflightRow], strict: bool) -> Result<()> {
     println!("Preflight for {}", selected_world_label(cfg));
     println!("Battlegroup : {}", cfg.battlegroup);
     println!("Namespace   : {}", cfg.namespace);
     println!();
-    for row in &rows {
+    for row in rows {
         println!("{:<16} {:<5} {}", row.label, row.state.label(), row.message);
     }
 
@@ -1236,6 +1316,26 @@ fn opt_u16(value: Option<u16>) -> String {
 }
 
 async fn cmd_status(cfg: &Config) -> Result<()> {
+    let diagnostics = dune_ctl_core::diagnostics::DiagnosticsSnapshot::collect().await;
+
+    if diagnostics.k3s_api.state == CheckState::Critical {
+        println!("World       : {}", selected_world_label(cfg));
+        println!("Battlegroup : {}", cfg.battlegroup);
+        println!("Namespace   : {}", cfg.namespace);
+        println!(
+            "Capsule     : {} {}",
+            cfg.backup_environment,
+            if cfg.has_capsule() {
+                "(capsule)"
+            } else {
+                "(legacy)"
+            }
+        );
+        print_check("k3s API", &diagnostics.k3s_api);
+        print_check("firewall backend", &diagnostics.firewall_backend);
+        anyhow::bail!("cannot read BattleGroup status because k3s is not ready");
+    }
+
     let snap = HealthSnapshot::collect(cfg).await?;
 
     println!(
@@ -1250,6 +1350,31 @@ async fn cmd_status(cfg: &Config) -> Result<()> {
         cfg.battlegroup, snap.battlegroup_phase
     );
     println!("Namespace   : {}", cfg.namespace);
+    println!(
+        "Capsule     : {} {}",
+        cfg.backup_environment,
+        if cfg.has_capsule() {
+            "(capsule)"
+        } else {
+            "(legacy)"
+        }
+    );
+    println!("k3s API     : {}", diagnostics.k3s_api.message);
+    println!("Start       : {}", start_summary(&snap));
+    if let Some(gateway) = &snap.gateway {
+        println!(
+            "Gateway     : {} ready {}/{}",
+            if gateway.patched {
+                "patched"
+            } else {
+                "missing RMQ HTTP patch"
+            },
+            opt_u32(gateway.ready_replicas),
+            opt_u32(gateway.updated_replicas)
+        );
+    } else {
+        println!("Gateway     : unavailable");
+    }
 
     if let Some(fls) = &snap.fls {
         println!(
@@ -1277,6 +1402,42 @@ async fn cmd_status(cfg: &Config) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn start_summary(snap: &HealthSnapshot) -> String {
+    let Some(primary) = snap.sietches.iter().find(|sietch| sietch.primary) else {
+        return format!("{}; primary Sietch missing", snap.battlegroup_phase);
+    };
+
+    if snap.battlegroup_stopped {
+        return format!(
+            "stopped; desired {} replicas={}, phase {}",
+            primary.map, primary.replicas, primary.phase
+        );
+    }
+
+    if snap.battlegroup_phase == "Healthy"
+        && primary.phase == "Running"
+        && primary.ready_replicas.unwrap_or_default() > 0
+        && primary.consistency == battlegroup::MapConsistency::CleanOn
+    {
+        return format!(
+            "ready; {} running {}/{}",
+            primary.map,
+            opt_u32(primary.ready_replicas),
+            opt_u32(primary.target_replicas)
+        );
+    }
+
+    format!(
+        "starting/degraded; BattleGroup {}, {} {} ready {}/{} state {}",
+        snap.battlegroup_phase,
+        primary.map,
+        primary.phase,
+        opt_u32(primary.ready_replicas),
+        opt_u32(primary.target_replicas),
+        primary.consistency.label()
+    )
 }
 
 async fn cmd_maps(action: MapsCommand, cfg: &Config) -> Result<()> {

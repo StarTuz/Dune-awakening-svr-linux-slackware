@@ -101,9 +101,9 @@ pub struct InputMode {
 impl PendingAction {
     pub fn label(self) -> &'static str {
         match self {
-            Self::StartSietch => "start primary sietch",
-            Self::StopSietch => "stop primary sietch",
-            Self::RestartSietch => "restart primary sietch",
+            Self::StartSietch => "start world / primary sietch",
+            Self::StopSietch => "stop world / primary sietch",
+            Self::RestartSietch => "restart world / primary sietch",
             Self::ApplySettings => "deploy settings",
             Self::ApplySettingsAndRestart => "deploy settings and restart primary sietch",
             Self::PullDeployedSettings => "pull deployed settings to local",
@@ -120,13 +120,13 @@ impl PendingAction {
     pub fn risk(self) -> &'static str {
         match self {
             Self::StartSietch => {
-                "Starts the selected world's primary Sietch. Current self-hosting maps this to BattleGroup start."
+                "Starts the selected World/BattleGroup. Current self-hosting maps this to the primary Sietch start."
             }
             Self::StopSietch => {
-                "Stops the selected world's primary Sietch. Current self-hosting maps this to BattleGroup stop, disconnecting players."
+                "Stops the selected World/BattleGroup through the primary Sietch lifecycle, disconnecting players."
             }
             Self::RestartSietch => {
-                "Restarts the selected world's primary Sietch by restarting the BattleGroup. Gateway patch may need verification after rollout."
+                "Restarts the selected World/BattleGroup through the primary Sietch lifecycle. Gateway patch may need verification after rollout."
             }
             Self::ApplySettings => {
                 "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings."
