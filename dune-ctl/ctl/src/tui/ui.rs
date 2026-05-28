@@ -619,6 +619,7 @@ fn draw_maps_table(f: &mut Frame, app: &App, area: Rect) {
         Cell::from("Ready").style(header_style()),
         Cell::from("Players").style(header_style()),
         Cell::from("Port").style(header_style()),
+        Cell::from("Persist").style(header_style()),
         Cell::from("State").style(header_style()),
     ]);
 
@@ -649,6 +650,16 @@ fn draw_maps_table(f: &mut Frame, app: &App, area: Rect) {
                 )),
                 Cell::from(opt_u32(map.players)),
                 Cell::from(opt_u16(map.game_port)),
+                Cell::from(if map.is_persistent() {
+                    format!("on {}", opt_u32(map.min_servers))
+                } else {
+                    "—".to_string()
+                })
+                .style(Style::default().fg(if map.is_persistent() {
+                    Color::Cyan
+                } else {
+                    Color::DarkGray
+                })),
                 Cell::from(map.consistency.label())
                     .style(Style::default().fg(consistency_color(map.consistency))),
             ])
@@ -667,6 +678,7 @@ fn draw_maps_table(f: &mut Frame, app: &App, area: Rect) {
             Constraint::Length(7),
             Constraint::Length(7),
             Constraint::Length(6),
+            Constraint::Length(8),
             Constraint::Length(10),
         ],
     )
@@ -714,6 +726,14 @@ fn draw_map_detail(f: &mut Frame, app: &App, area: Rect) {
             opt_u32(map.target_replicas)
         )),
         Line::from(format!("Consistency: {}", map.consistency.label())),
+        Line::from(if map.is_persistent() {
+            format!(
+                "Persistence: MinServers={} (director keeps/auto-restarts)",
+                opt_u32(map.min_servers)
+            )
+        } else {
+            "Persistence: off (on-demand)".to_string()
+        }),
         Line::from(format!("Players: {}", opt_u32(map.players))),
         Line::from(format!("Port: {}", opt_u16(map.game_port))),
         Line::from(format!("SFPS: {}", map.sfps.as_deref().unwrap_or("—"))),

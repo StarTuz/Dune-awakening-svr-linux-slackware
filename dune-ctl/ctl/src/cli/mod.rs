@@ -263,6 +263,23 @@ pub enum MapsCommand {
     },
     /// Stop a running map
     Stop { name: String },
+    /// Toggle director-managed persistence (MinServers) for a map.
+    ///
+    /// Persistence is separate from start/stop: --on does not start the map
+    /// now, and --off is required before a stop will stick. Writes the live
+    /// BattleGroup CR and mirrors the capsule source.
+    Persist {
+        name: String,
+        /// Make the map director-persistent (MinServers=1)
+        #[arg(long)]
+        on: bool,
+        /// Remove director persistence (MinServers=0)
+        #[arg(long)]
+        off: bool,
+        /// Confirm the live change (disconnects nobody, but edits the CR)
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1392,13 +1409,18 @@ async fn cmd_status(cfg: &Config) -> Result<()> {
     }
 
     println!();
-    println!("{:<32} {:<12} {}", "Map", "Phase", "Replicas");
-    println!("{}", "-".repeat(50));
+    println!("{:<32} {:<12} {:<10} Persist", "Map", "Phase", "Replicas");
+    println!("{}", "-".repeat(64));
     for map in &snap.maps {
         let dot = if map.phase == "Running" { "●" } else { "○" };
+        let persist = if map.is_persistent() {
+            format!("MinServers={}", opt_u32(map.min_servers))
+        } else {
+            "—".to_string()
+        };
         println!(
-            "{} {:<30} {:<12} {}",
-            dot, map.name, map.phase, map.replicas
+            "{} {:<30} {:<12} {:<10} {}",
+            dot, map.name, map.phase, map.replicas, persist
         );
     }
     Ok(())
@@ -1446,7 +1468,12 @@ async fn cmd_maps(action: MapsCommand, cfg: &Config) -> Result<()> {
             let snap = HealthSnapshot::collect(cfg).await?;
             for map in &snap.maps {
                 let dot = if map.phase == "Running" { "●" } else { "○" };
-                println!("{} {}  ({})", dot, map.name, map.phase);
+                let persist = if map.is_persistent() {
+                    format!("  [persist MinServers={}]", opt_u32(map.min_servers))
+                } else {
+                    String::new()
+                };
+                println!("{} {}  ({}){}", dot, map.name, map.phase, persist);
             }
         }
         MapsCommand::Start { name, force } => {
@@ -1456,11 +1483,75 @@ async fn cmd_maps(action: MapsCommand, cfg: &Config) -> Result<()> {
             print_target_summary(cfg);
         }
         MapsCommand::Stop { name } => {
+            if let Ok(Some(min)) = maps::min_servers(cfg, &name).await {
+                if min >= 1 {
+                    println!(
+                        "warning: {} is director-persistent (MinServers={}); the director will \
+                         likely restart it.\n         Run 'maps persist {} --off' first for a \
+                         durable stop.",
+                        name, min, name
+                    );
+                }
+            }
             println!("Stopping {}...", name);
             maps::stop(cfg, &name).await?;
             println!("{}: stop triggered.", name);
             print_target_summary(cfg);
         }
+        MapsCommand::Persist { name, on, off, yes } => {
+            cmd_maps_persist(cfg, name, on, off, yes).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_maps_persist(
+    cfg: &Config,
+    name: String,
+    on: bool,
+    off: bool,
+    yes: bool,
+) -> Result<()> {
+    let on = match (on, off) {
+        (true, false) => true,
+        (false, true) => false,
+        _ => anyhow::bail!("specify exactly one of --on / --off"),
+    };
+    if !yes {
+        anyhow::bail!(
+            "refusing to change map persistence without --yes; this edits the live \
+             BattleGroup CR director.ini (and the capsule source)"
+        );
+    }
+
+    let verb = if on { "persistent" } else { "not persistent" };
+    println!("Setting {} {} (MinServers={})...", name, verb, on as u32);
+    let outcome = maps::set_persistence(cfg, &name, on, true).await?;
+
+    println!(
+        "{}: director.ini MinServers {} -> {}{}",
+        name,
+        opt_u32(outcome.previous),
+        outcome.applied,
+        if outcome.cr_changed {
+            ""
+        } else {
+            " (CR already matched)"
+        }
+    );
+    match (outcome.capsule_updated, &outcome.capsule_note) {
+        (Some(true), _) => println!("capsule    : battlegroup.yaml updated"),
+        (_, Some(note)) => println!("capsule    : {}", note),
+        _ => {}
+    }
+    if on {
+        println!(
+            "note       : persistence does not start the map now — run 'maps start {}' to \
+             bring it up; the director will keep/restart it.",
+            name
+        );
+    } else {
+        println!("note       : run 'maps stop {}' if you also want it down now.", name);
     }
     Ok(())
 }

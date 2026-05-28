@@ -178,6 +178,18 @@ For dedicated-scaled maps, `ServerSetScale.spec.partitions` must also be patched
 
 After a k3s restart, maps do not come back automatically — use `map-toggle.sh start` or `battlegroup.sh restart` (followed by `gateway-patch.sh`).
 
+**Map persistence (auto-restart across reboots).** Start/stop (replicas) is a
+separate layer from the director's per-map `MinServers` in `director.ini`. With
+`MinServers = 0` (default for every map) the director powers a map back down
+when nothing needs it and never brings it back after a restart — the root of the
+"maps don't auto-restart after reboot" behaviour and the 2026-05-17 social-hub
+power-down. To make a map come back on its own, toggle it persistent with
+`dune-ctl --world Ixware maps persist <Map> --on --yes` (writes the live CR and
+mirrors the capsule `battlegroup.yaml`; `--off` reverts). `--on` does not start
+the map now and `--off` is required before a `maps stop` will stick. `maps list`
+/ `status` / the TUI show persistence state. Social hubs (`SH_*`) are left on the
+director's on-demand handshake by default and should not be forced persistent.
+
 ## VPA memory recommendations
 
 VPA 1.6.0 recommender deployed 2026-05-13. Off mode — recommendations only, no auto-apply.

@@ -181,10 +181,12 @@ dune-ctl capsules activate --env live --world-id sh-db3533a2d5a25fb-silakw
 ### `dune-ctl maps`
 
 ```sh
-dune-ctl maps list            # all 28 maps with current phase
+dune-ctl maps list            # all 28 maps with current phase + persist state
 dune-ctl maps start <name>    # start a stopped map
 dune-ctl maps stop  <name>    # stop a running map
 dune-ctl maps start SH_Arrakeen --force   # bypass social-hub guard
+dune-ctl maps persist <name> --on  --yes  # director-persistent (MinServers=1)
+dune-ctl maps persist <name> --off --yes  # remove persistence (MinServers=0)
 ```
 
 Map names are case-sensitive and match the Kubernetes ServerSet names
@@ -194,6 +196,25 @@ Social hub maps (`SH_*`) are director-managed. Starting one manually puts the
 game in an inconsistent state unless the director has already allocated it.
 Use `--force` only when you know what you are doing. Prefer joining the map
 in-game to trigger director allocation.
+
+#### Map persistence (`maps persist`)
+
+`maps persist` toggles the director's per-map `MinServers` in `director.ini` —
+a layer **separate from** `start`/`stop` (replicas/ServerSetScale):
+
+- `start`/`stop` are imperative "on/off now".
+- `persist --on` (MinServers=1) tells the director to keep at least one server
+  of the map alive and **auto-restart it after a reboot**. It does *not* start
+  the map immediately — pair with `maps start` to bring it up now.
+- `persist --off` (MinServers=0) is required before a `stop` will stick; while a
+  map is persistent, `maps stop` warns that the director will restart it.
+
+The change is written to the live BattleGroup CR (durable across operator
+reconcile) and mirrored into the capsule source `battlegroup.yaml` so a
+cold-swap re-activation does not revert it. `maps list`, the `status` table, and
+the TUI Maps view show the persistence state. Requires `--yes` (it edits the
+live CR). Social hubs (`SH_*`) are intentionally not made persistent by default —
+leave them on the director's on-demand handshake.
 
 ### `dune-ctl sietches`
 

@@ -89,7 +89,11 @@ A capsule is:
 - World title.
 - FLS token identity and secret YAML.
 - RMQ secret YAML.
-- Rendered BattleGroup YAML.
+- Rendered BattleGroup YAML. This embeds the director config
+  (`spec.utilities.director.spec.configFiles.files."director.ini"`), including
+  per-map `MinServers` persistence. `dune-ctl maps persist` writes both the live
+  CR and this capsule copy so a cold-swap re-activation keeps persistence
+  settings; editing only the live CR would be reverted on activation.
 - Per-world UserSettings profile.
 - Backup root.
 - Optional exported namespace evidence.

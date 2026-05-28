@@ -37,6 +37,17 @@ pub struct MapEntry {
     pub memory_request: Option<String>,
     pub memory_limit: Option<String>,
     pub consistency: MapConsistency,
+    /// director.ini MinServers for this map (None = no entry; 0/None = not
+    /// persistent). When >= 1 the director keeps and auto-restarts the map.
+    pub min_servers: Option<u32>,
+}
+
+impl MapEntry {
+    /// True when the director is configured to keep at least one server of this
+    /// map alive (and auto-restart it across reboots).
+    pub fn is_persistent(&self) -> bool {
+        self.min_servers.unwrap_or(0) >= 1
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +64,7 @@ pub struct SietchEntry {
     pub memory_request: Option<String>,
     pub memory_limit: Option<String>,
     pub consistency: MapConsistency,
+    pub min_servers: Option<u32>,
     pub primary: bool,
 }
 
@@ -235,6 +247,8 @@ fn parse_maps(bg: &Value) -> Vec<MapEntry> {
         })
         .collect();
 
+    let min_servers_by_map = parse_director_min_servers(bg);
+
     let Some(sets) = bg
         .pointer("/spec/serverGroup/template/spec/sets")
         .and_then(|v| v.as_array())
@@ -244,6 +258,7 @@ fn parse_maps(bg: &Value) -> Vec<MapEntry> {
     sets.iter()
         .filter_map(|s| {
             let name = s.get("map")?.as_str()?.to_string();
+            let min_servers = min_servers_by_map.get(&name).copied();
             let replicas = s.get("replicas").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
             let partitions = s
                 .get("partitions")
@@ -266,9 +281,48 @@ fn parse_maps(bg: &Value) -> Vec<MapEntry> {
                 ready: None,
                 sfps: None,
                 consistency: MapConsistency::Unknown,
+                min_servers,
             })
         })
         .collect()
+}
+
+/// Parse per-map `MinServers` out of the director.ini blob embedded in the
+/// BattleGroup CR at
+/// `spec.utilities.director.spec.configFiles.files."director.ini"`.
+///
+/// The blob is INI-shaped: `[ MapName ]` section headers followed by
+/// `Key = Value` lines. Only maps with an explicit `MinServers` line appear in
+/// the returned map; absent means 0 (not persistent).
+pub fn parse_director_min_servers(bg: &Value) -> HashMap<String, u32> {
+    let mut out = HashMap::new();
+    let Some(ini) = bg
+        .pointer("/spec/utilities/director/spec/configFiles/files/director.ini")
+        .and_then(|v| v.as_str())
+    else {
+        return out;
+    };
+
+    let mut section: Option<String> = None;
+    for line in ini.lines() {
+        let trimmed = line.trim();
+        if let Some(name) = trimmed
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            section = Some(name.trim().to_string());
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        if key.trim().eq_ignore_ascii_case("MinServers") {
+            if let (Some(map), Ok(n)) = (&section, value.trim().parse::<u32>()) {
+                out.insert(map.clone(), n);
+            }
+        }
+    }
+    out
 }
 
 pub fn derive_sietches(maps: &[MapEntry]) -> Vec<SietchEntry> {
@@ -287,6 +341,7 @@ pub fn derive_sietches(maps: &[MapEntry]) -> Vec<SietchEntry> {
             memory_request: map.memory_request.clone(),
             memory_limit: map.memory_limit.clone(),
             consistency: map.consistency,
+            min_servers: map.min_servers,
             primary: true,
         })
         .collect()
@@ -478,4 +533,36 @@ fn as_u16(v: &Value) -> Option<u16> {
 
 fn str_value(v: &Value) -> Option<String> {
     v.as_str().map(str::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parses_minservers_per_map() {
+        let bg = json!({
+            "spec": { "utilities": { "director": { "spec": { "configFiles": { "files": {
+                "director.ini":
+                    "[ Battlegroup ]\nAuthorizationPreset = BattlegroupInternal\n\n\
+                     [ InstancingModes ]\nDeepDesert_1=ClassicalInstancing\n\n\
+                     [ DeepDesert_1 ]\nNumExtraServers = 0\nMinServers = 1\n\n\
+                     [ SH_Arrakeen ]\nNumExtraServers = 0\nMinServers = 0\n\n\
+                     [ Story_ArtOfKanly ]\nNumExtraServers = 0"
+            }}}}}}
+        });
+        let m = parse_director_min_servers(&bg);
+        assert_eq!(m.get("DeepDesert_1"), Some(&1));
+        assert_eq!(m.get("SH_Arrakeen"), Some(&0));
+        // No MinServers line → absent (treated as not persistent).
+        assert_eq!(m.get("Story_ArtOfKanly"), None);
+        // InstancingModes key referencing a map is not a MinServers entry.
+        assert_eq!(m.get("InstancingModes"), None);
+    }
+
+    #[test]
+    fn missing_director_ini_is_empty() {
+        assert!(parse_director_min_servers(&json!({"spec": {}})).is_empty());
+    }
 }

@@ -129,7 +129,8 @@
       "Bash(RUSTUP_HOME=__TRACKED_VAR__/.rustup CARGO_HOME=__TRACKED_VAR__/.cargo cargo clippy --release -p dune-ctl)",
       "Bash(./target/release/dune-ctl --version)",
       "Bash(./target/release/dune-ctl --world Ixware diagnostics)",
-      "Bash(./target/release/dune-ctl --world Ixware status)"
+      "Bash(./target/release/dune-ctl --world Ixware status)",
+      "Bash(echo \"exit-grep: $?\")"
     ]
   }
 }

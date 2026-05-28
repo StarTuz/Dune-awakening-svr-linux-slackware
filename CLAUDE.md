@@ -208,6 +208,13 @@ dune-ctl --world Ixware maps list
 dune-ctl --world Ixware maps start DeepDesert_1
 dune-ctl --world Ixware maps stop  DeepDesert_1
 
+# Map persistence (director.ini MinServers) — separate layer from start/stop.
+# --on makes the director keep + auto-restart the map (survives reboot); it does
+# NOT start the map now. --off is required before a stop will stick. Writes the
+# live BattleGroup CR and mirrors the capsule source so a cold-swap won't revert.
+dune-ctl --world Ixware maps persist DeepDesert_1 --on  --yes
+dune-ctl --world Ixware maps persist DeepDesert_1 --off --yes
+
 # Settings (per-world UserSettings profile under ~/.dune/worlds/<bg>/)
 dune-ctl --world Ixware settings status      # local-vs-deployed drift
 dune-ctl --world Ixware settings pull        # sync deployed → local
@@ -473,7 +480,10 @@ After k3s is up, start the world and reapply the gateway patch:
 
 Maps that were running before a reboot may not restart automatically in the
 same shape. Use `dune-ctl --world Ixware maps list` and explicitly start any
-needed travel map such as `DeepDesert_1`.
+needed travel map such as `DeepDesert_1`. To make a map come back on its own
+after a reboot, mark it director-persistent once with
+`dune-ctl --world Ixware maps persist <Map> --on --yes` — the director then
+keeps and auto-restarts it (`maps list` shows `[persist MinServers=N]`).
 
 ---
 
