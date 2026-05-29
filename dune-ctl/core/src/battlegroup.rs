@@ -396,6 +396,10 @@ pub enum MapConsistency {
     CleanOff,
     Starting,
     Stopping,
+    /// Director-allocated on demand: BattleGroup CR desires 0 but the
+    /// ServerSetScale was scaled to 1 by the director and the map is running
+    /// (e.g. a social hub a player travelled to). Not a fault.
+    OnDemand,
     Split,
     Unknown,
 }
@@ -407,6 +411,7 @@ impl MapConsistency {
             Self::CleanOff => "clean off",
             Self::Starting => "starting",
             Self::Stopping => "stopping",
+            Self::OnDemand => "on-demand",
             Self::Split => "split",
             Self::Unknown => "unknown",
         }
@@ -515,6 +520,11 @@ fn map_consistency(map: &MapEntry) -> MapConsistency {
         (0, Some(0)) => MapConsistency::CleanOff,
         (1, Some(1)) if map.ready_replicas.unwrap_or(0) >= 1 => MapConsistency::CleanOn,
         (1, Some(1)) => MapConsistency::Starting,
+        // Director-allocated on demand: CR desires 0 but the scaler is at 1 and
+        // the map is actually up. Common for social hubs a player travelled to.
+        (0, Some(1)) if map.phase == "Running" && map.ready_replicas.unwrap_or(0) >= 1 => {
+            MapConsistency::OnDemand
+        }
         (0, Some(1)) => MapConsistency::Stopping,
         (bg, Some(scale)) if bg != scale => MapConsistency::Split,
         (0, None) if map.phase == "Stopped" => MapConsistency::CleanOff,
@@ -564,5 +574,40 @@ mod tests {
     #[test]
     fn missing_director_ini_is_empty() {
         assert!(parse_director_min_servers(&json!({"spec": {}})).is_empty());
+    }
+
+    fn map_with(replicas: u32, scale: Option<u32>, phase: &str, ready: Option<u32>) -> MapEntry {
+        MapEntry {
+            name: "SH_Arrakeen".to_string(),
+            category: MapCategory::Social,
+            phase: phase.to_string(),
+            replicas,
+            scale_replicas: scale,
+            ready_replicas: ready,
+            target_replicas: ready,
+            partitions: vec![],
+            players: None,
+            ready: None,
+            game_port: None,
+            sfps: None,
+            memory_request: None,
+            memory_limit: None,
+            consistency: MapConsistency::Unknown,
+            min_servers: None,
+        }
+    }
+
+    #[test]
+    fn director_allocated_hub_is_on_demand_not_stopping() {
+        // Live SH_Arrakeen after travel: CR replicas=0, scaler=1, Running, ready 1.
+        assert_eq!(
+            map_consistency(&map_with(0, Some(1), "Running", Some(1))),
+            MapConsistency::OnDemand
+        );
+        // Genuinely tearing down: scaler still 1 but not yet running/ready.
+        assert_eq!(
+            map_consistency(&map_with(0, Some(1), "Stopping", Some(0))),
+            MapConsistency::Stopping
+        );
     }
 }

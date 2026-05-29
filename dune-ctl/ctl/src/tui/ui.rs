@@ -1464,6 +1464,7 @@ fn check_color(state: CheckState) -> Color {
 fn consistency_color(consistency: MapConsistency) -> Color {
     match consistency {
         MapConsistency::CleanOn => Color::Green,
+        MapConsistency::OnDemand => Color::Cyan,
         MapConsistency::CleanOff => Color::DarkGray,
         MapConsistency::Starting | MapConsistency::Stopping => Color::Yellow,
         MapConsistency::Split => Color::Red,
@@ -1474,6 +1475,7 @@ fn consistency_color(consistency: MapConsistency) -> Color {
 fn map_dot(map: &MapEntry) -> &'static str {
     match map.consistency {
         MapConsistency::CleanOn => "● ",
+        MapConsistency::OnDemand => "◆ ",
         MapConsistency::CleanOff => "○ ",
         MapConsistency::Starting | MapConsistency::Stopping => "◐ ",
         MapConsistency::Split => "! ",
