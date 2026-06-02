@@ -1,13 +1,19 @@
 # dune-ctl Sietch Management — Design & Implementation Plan
 
-Status: **Phase 0 ✅ + Phase 1 ✅ done; Phase 2 next** (2026-06-02). Motivating
-case: `../PLANETOLOGIST-TRAINER-BUG.md` (a single-Sietch world blocks a quest
-whose recovery requires switching Sietches).
+Status: **Phase 0 ✅ + Phase 1 ✅ + Phase 2 core ✅; naming/remove/rename pending**
+(2026-06-02). Motivating case: `../PLANETOLOGIST-TRAINER-BUG.md` (a single-Sietch
+world blocks a quest whose recovery requires switching Sietches).
 
 - Phase 0: `sietches edit [--advanced]` wraps `bg-util` (`core/src/sietches.rs::edit`).
 - Phase 1: `sietches list` shows capacity (`active`/`max` = enabled
-  `worldPartitions`) with a single-Sietch hint (`core/src/sietches.rs::capacity`,
-  unit-tested).
+  `worldPartitions`) with a single-Sietch hint (`core/src/sietches.rs::capacity`).
+- Phase 2 core: `sietches add` (`plan_add_sietch`/`build_add_patch`) + `sietches
+  scale` (active ≤ max invariant). Unit tests assert `add` reproduces bg-util's
+  captured diff exactly (id 31 / dimension 1 / replicas 2); verified live via
+  `--dry-run`. Auto-backup + `--yes` + `--dry-run` on `add`.
+- **Pending:** per-Sietch unique name/password (`sets[i].podSpecs[]` — needs one
+  captured bg-util example to confirm the `index`/arg form), `remove`, `rename`,
+  TUI, and capsule mirroring of Sietch topology.
 
 ## Goal
 
@@ -145,6 +151,41 @@ CR-diff fixture.
   replicas≤count / per-partition-name model).
 - `CLAUDE.md`: correct the Sietches line (currently "maps to BattleGroup spec.stop").
 - Cross-link from `PLANETOLOGIST-TRAINER-BUG.md`.
+
+## DECODED: bg-util's add-a-Sietch scheme (2026-06-02)
+
+Ran `bg-util -f <copy-of-CR>` and raised Survival_1 to 2 servers; the diff shows
+exactly what an added Sietch writes (this is now the Phase-2 test fixture):
+
+```yaml
+# spec.database…worldPartitions[Survival_1].partitions — append:
+- dimension: 1          # = (max existing dimension for this map) + 1
+  disable: false
+  id: 31                # = (global max partition id across ALL maps) + 1   (ids were 1..30)
+  maxX: 1               # copied from the existing partition's grid (1x1)
+  maxY: 1
+  minX: 0
+  minY: 0
+# spec.serverGroup…sets[Survival_1]:
+  partitions: [1, 31]   # append the new id
+  replicas: 2           # = active Sietch count
+```
+
+So **add a Sietch** =
+1. append a `worldPartitions` partition: `dimension = max_dim+1`, `id = global_max_id+1`, copy the grid;
+2. append that `id` to `sets[i].partitions`;
+3. set `sets[i].replicas` = active count.
+
+This is precisely what our manual `replicas`-only bump lacked (no matching
+partition/dimension → crash). `plan_add_sietch`/`build_add_patch` reproduce this
+exact output under unit test.
+
+**Per-Sietch name/password** = `sets[i].podSpecs[]` entries (CRD `ServerPodSpec`:
+`index` (pod index), `map`, per-pod `arguments`). A unique name is a podSpecs
+`arguments` override (`-ini:engine:...:Bgd.ServerDisplayName=...`). The exact
+arg/`index` form still needs one captured bg-util example (the decode round set
+no name), so `rename`/`add --name` are deferred until that is confirmed — do not
+guess the `index` value.
 
 ## Risks / open questions
 

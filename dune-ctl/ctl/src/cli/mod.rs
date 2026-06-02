@@ -298,6 +298,29 @@ pub enum SietchesCommand {
         #[arg(long)]
         advanced: bool,
     },
+    /// Add a Sietch (provisions a world partition + raises the active count)
+    Add {
+        /// Apply without the confirmation gate
+        #[arg(long)]
+        yes: bool,
+        /// Show the CR patch without applying
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the automatic pre-change backup
+        #[arg(long)]
+        skip_backup: bool,
+    },
+    /// Set the number of active Sietches (replicas) for the primary map
+    Scale {
+        /// Desired active Sietch count (must be <= existing world partitions)
+        count: u32,
+        /// Apply without the confirmation gate
+        #[arg(long)]
+        yes: bool,
+        /// Show the result without applying
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -770,6 +793,77 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
                 );
             }
             sietches::edit(cfg, advanced).await?;
+        }
+        SietchesCommand::Add {
+            yes,
+            dry_run,
+            skip_backup,
+        } => {
+            if dry_run {
+                let (plan, patch) = sietches::add(cfg, true).await?;
+                println!(
+                    "Dry run — would add a Sietch to {} (active {} -> {}):",
+                    plan.map,
+                    plan.new_replicas - 1,
+                    plan.new_replicas
+                );
+                println!(
+                    "  new world partition: id={} dimension={} grid bounds x[{}..{}] y[{}..{}]",
+                    plan.new_partition_id,
+                    plan.new_dimension,
+                    plan.min_x,
+                    plan.max_x,
+                    plan.min_y,
+                    plan.max_y
+                );
+                println!("CR patch:\n{patch}");
+                return Ok(());
+            }
+            if !yes {
+                anyhow::bail!(
+                    "refusing to add a Sietch without --yes; rerun with --dry-run to inspect the CR patch first"
+                );
+            }
+            if !skip_backup {
+                println!("Backing up before adding a Sietch...");
+                backup::run(cfg, false, None).await?;
+            }
+            let (plan, _) = sietches::add(cfg, false).await?;
+            println!(
+                "Added Sietch to {}: world partition id={} (dimension {}); active Sietches now {}.",
+                plan.map, plan.new_partition_id, plan.new_dimension, plan.new_replicas
+            );
+            println!(
+                "Note: the new Sietch inherits the world's shared display name until per-Sietch \
+                 naming lands (see dune-ctl/SIETCHES-DESIGN.md). Each Sietch needs ~5 Gi RAM — \
+                 verify headroom and that the new instance reaches Running."
+            );
+            print_target_summary(cfg);
+        }
+        SietchesCommand::Scale {
+            count,
+            yes,
+            dry_run,
+        } => {
+            if dry_run {
+                let cap = sietches::scale(cfg, count, true).await?;
+                println!(
+                    "Dry run — would set active Sietches to {} (max {}) for {}.",
+                    cap.active, cap.max, cap.map
+                );
+                return Ok(());
+            }
+            if !yes {
+                anyhow::bail!(
+                    "refusing to scale Sietches without --yes; rerun with --dry-run to inspect only"
+                );
+            }
+            let cap = sietches::scale(cfg, count, false).await?;
+            println!(
+                "Active Sietches set to {} (max {}) for {}.",
+                cap.active, cap.max, cap.map
+            );
+            print_target_summary(cfg);
         }
     }
     Ok(())

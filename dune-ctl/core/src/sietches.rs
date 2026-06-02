@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::process::Command;
@@ -7,6 +7,203 @@ use tokio::process::Command;
 use crate::{battlegroup, config::Config, kubectl};
 
 pub const PRIMARY_SIETCH_MAP: &str = "Survival_1";
+
+const WORLD_PARTITIONS_PTR: &str = "/spec/database/template/spec/deployment/spec/worldPartitions";
+const SETS_PTR: &str = "/spec/serverGroup/template/spec/sets";
+
+/// A computed plan to add one Sietch to a map, derived purely from the live
+/// BattleGroup JSON. Mirrors exactly what `bg-util` writes (verified against a
+/// captured `bg-util` diff): a new `worldPartitions` partition (next dimension,
+/// next global id, same grid), the id appended to the set's `partitions`, and
+/// `replicas` raised by one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddSietchPlan {
+    pub map: String,
+    pub set_index: usize,
+    pub worldpartitions_index: usize,
+    pub new_partition_id: u32,
+    pub new_dimension: u32,
+    pub new_replicas: u32,
+    pub min_x: i64,
+    pub max_x: i64,
+    pub min_y: i64,
+    pub max_y: i64,
+}
+
+/// Compute the add-Sietch plan for `map` from the BattleGroup JSON.
+fn plan_add_sietch(bg: &Value, map: &str) -> Result<AddSietchPlan> {
+    let sets = bg
+        .pointer(SETS_PTR)
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("serverGroup sets not found in BattleGroup CR"))?;
+    let set_index = sets
+        .iter()
+        .position(|s| s.get("map").and_then(|m| m.as_str()) == Some(map))
+        .ok_or_else(|| anyhow::anyhow!("map '{}' not found in serverGroup sets", map))?;
+    let current_replicas = sets[set_index]
+        .get("replicas")
+        .and_then(|r| r.as_u64())
+        .unwrap_or(0) as u32;
+
+    let wps = bg
+        .pointer(WORLD_PARTITIONS_PTR)
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("worldPartitions not found in BattleGroup CR"))?;
+    let worldpartitions_index = wps
+        .iter()
+        .position(|e| e.get("map").and_then(|m| m.as_str()) == Some(map))
+        .ok_or_else(|| anyhow::anyhow!("worldPartitions entry for '{}' not found", map))?;
+    let map_parts = wps[worldpartitions_index]
+        .get("partitions")
+        .and_then(|p| p.as_array())
+        .ok_or_else(|| anyhow::anyhow!("partitions missing for map '{}'", map))?;
+
+    // id = (global max id across ALL maps) + 1  (bg-util assigns globally-unique ids)
+    let global_max_id = wps
+        .iter()
+        .filter_map(|e| e.get("partitions").and_then(|p| p.as_array()))
+        .flatten()
+        .filter_map(|p| p.get("id").and_then(|i| i.as_u64()))
+        .max()
+        .unwrap_or(0);
+    let new_partition_id = (global_max_id + 1) as u32;
+
+    // dimension = (max existing dimension for this map) + 1
+    let new_dimension = map_parts
+        .iter()
+        .filter_map(|p| p.get("dimension").and_then(|d| d.as_u64()))
+        .max()
+        .map(|m| m + 1)
+        .unwrap_or(0) as u32;
+
+    // Grid copied from the map's existing partition (default to 1x1).
+    let grid = |key: &str, default: i64| -> i64 {
+        map_parts
+            .first()
+            .and_then(|p| p.get(key))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(default)
+    };
+
+    Ok(AddSietchPlan {
+        map: map.to_string(),
+        set_index,
+        worldpartitions_index,
+        new_partition_id,
+        new_dimension,
+        new_replicas: current_replicas + 1,
+        min_x: grid("minX", 0),
+        max_x: grid("maxX", 1),
+        min_y: grid("minY", 0),
+        max_y: grid("maxY", 1),
+    })
+}
+
+/// Build the RFC-6902 JSON patch that realises an [`AddSietchPlan`].
+fn build_add_patch(plan: &AddSietchPlan) -> Vec<Value> {
+    let new_partition = json!({
+        "dimension": plan.new_dimension,
+        "disable": false,
+        "id": plan.new_partition_id,
+        "maxX": plan.max_x,
+        "maxY": plan.max_y,
+        "minX": plan.min_x,
+        "minY": plan.min_y,
+    });
+    vec![
+        json!({
+            "op": "add",
+            "path": format!("{}/{}/partitions/-", WORLD_PARTITIONS_PTR, plan.worldpartitions_index),
+            "value": new_partition,
+        }),
+        json!({
+            "op": "add",
+            "path": format!("{}/{}/partitions/-", SETS_PTR, plan.set_index),
+            "value": plan.new_partition_id,
+        }),
+        json!({
+            "op": "replace",
+            "path": format!("{}/{}/replicas", SETS_PTR, plan.set_index),
+            "value": plan.new_replicas,
+        }),
+    ]
+}
+
+/// Add a Sietch to the primary Sietch map. Returns the plan (also usable for a
+/// dry-run preview). Does NOT take a backup itself — callers should back up first
+/// (the CLI does). Per-Sietch naming is not yet wired (see `SIETCHES-DESIGN.md`),
+/// so the new Sietch inherits the world's shared `ServerDisplayName` until then.
+pub async fn add(cfg: &Config, dry_run: bool) -> Result<(AddSietchPlan, String)> {
+    let bg =
+        kubectl::get_json(&["get", "battlegroup", &cfg.battlegroup, "-n", &cfg.namespace]).await?;
+    let plan = plan_add_sietch(&bg, PRIMARY_SIETCH_MAP)?;
+    let patch = build_add_patch(&plan);
+    let patch_json = serde_json::to_string_pretty(&patch)?;
+    if dry_run {
+        return Ok((plan, patch_json));
+    }
+    kubectl::run(&[
+        "patch",
+        "battlegroup",
+        &cfg.battlegroup,
+        "-n",
+        &cfg.namespace,
+        "--type=json",
+        &format!("-p={}", serde_json::to_string(&patch)?),
+    ])
+    .await?;
+    Ok((plan, patch_json))
+}
+
+/// Set the number of active Sietches (`sets[i].replicas`) for the primary map.
+/// Enforces the bg-util invariant `active <= max` (enabled `worldPartitions`
+/// count); raising beyond the current max requires `add` first.
+pub async fn scale(cfg: &Config, active: u32, dry_run: bool) -> Result<SietchCapacity> {
+    let bg =
+        kubectl::get_json(&["get", "battlegroup", &cfg.battlegroup, "-n", &cfg.namespace]).await?;
+    let max = enabled_partition_count(&bg, PRIMARY_SIETCH_MAP);
+    if active as usize > max {
+        anyhow::bail!(
+            "cannot set active Sietches to {} — only {} world partition(s) exist for {}.\n\
+             Add a Sietch first (`dune-ctl sietches add`), which provisions the partition a \
+             new instance needs; a bare replicas bump beyond the partition count crash-loops.",
+            active,
+            max,
+            PRIMARY_SIETCH_MAP
+        );
+    }
+    let set_index = bg
+        .pointer(SETS_PTR)
+        .and_then(|v| v.as_array())
+        .and_then(|sets| {
+            sets.iter()
+                .position(|s| s.get("map").and_then(|m| m.as_str()) == Some(PRIMARY_SIETCH_MAP))
+        })
+        .ok_or_else(|| anyhow::anyhow!("{} not found in serverGroup sets", PRIMARY_SIETCH_MAP))?;
+
+    if !dry_run {
+        let patch = json!([{
+            "op": "replace",
+            "path": format!("{}/{}/replicas", SETS_PTR, set_index),
+            "value": active,
+        }]);
+        kubectl::run(&[
+            "patch",
+            "battlegroup",
+            &cfg.battlegroup,
+            "-n",
+            &cfg.namespace,
+            "--type=json",
+            &format!("-p={}", serde_json::to_string(&patch)?),
+        ])
+        .await?;
+    }
+    Ok(SietchCapacity {
+        map: PRIMARY_SIETCH_MAP.to_string(),
+        max,
+        active,
+    })
+}
 
 /// Sietch capacity for the primary Sietch map, per the Battlegroup Editor model:
 /// the maximum number of Sietches a map can run equals its enabled
@@ -191,5 +388,95 @@ mod tests {
         let v = bg(json!([{ "id": 1 }]), 1);
         assert_eq!(enabled_partition_count(&v, "DeepDesert_1"), 0);
         assert_eq!(set_replicas(&v, "DeepDesert_1"), 0);
+    }
+
+    /// Fixture mirroring the live CR: Survival_1 has one partition (id 1, dim 0),
+    /// and other maps fill ids 2..=max_id. Survival_1 set has `replicas`.
+    fn bg_full(max_id: u64, replicas: u64) -> Value {
+        let mut world_partitions = vec![json!({
+            "map": "Survival_1",
+            "partitions": [{ "dimension": 0, "disable": false, "id": 1,
+                             "maxX": 1, "maxY": 1, "minX": 0, "minY": 0 }]
+        })];
+        for id in 2..=max_id {
+            world_partitions.push(json!({
+                "map": format!("Map{id}"),
+                "partitions": [{ "dimension": 0, "disable": false, "id": id,
+                                 "maxX": 1, "maxY": 1, "minX": 0, "minY": 0 }]
+            }));
+        }
+        json!({
+            "spec": {
+                "database": { "template": { "spec": { "deployment": { "spec": {
+                    "worldPartitions": world_partitions
+                }}}}},
+                "serverGroup": { "template": { "spec": { "sets": [
+                    { "map": "Survival_1", "replicas": replicas, "partitions": [1] }
+                ]}}}
+            }
+        })
+    }
+
+    #[test]
+    fn add_plan_matches_bg_util_output() {
+        // ids 1..=30 exist, Survival_1 dim 0; adding a Sietch must mirror bg-util:
+        // new id 31, dimension 1, replicas 2, 1x1 grid (captured from a real diff).
+        let v = bg_full(30, 1);
+        let plan = plan_add_sietch(&v, "Survival_1").unwrap();
+        assert_eq!(plan.new_partition_id, 31);
+        assert_eq!(plan.new_dimension, 1);
+        assert_eq!(plan.new_replicas, 2);
+        assert_eq!(
+            (plan.min_x, plan.max_x, plan.min_y, plan.max_y),
+            (0, 1, 0, 1)
+        );
+        assert_eq!(plan.set_index, 0);
+        assert_eq!(plan.worldpartitions_index, 0);
+    }
+
+    #[test]
+    fn add_patch_matches_bg_util_diff() {
+        let v = bg_full(30, 1);
+        let plan = plan_add_sietch(&v, "Survival_1").unwrap();
+        let patch = build_add_patch(&plan);
+        assert_eq!(patch.len(), 3);
+        // 1) append the new partition object to worldPartitions[0].partitions
+        assert_eq!(patch[0]["op"], "add");
+        assert_eq!(
+            patch[0]["path"],
+            "/spec/database/template/spec/deployment/spec/worldPartitions/0/partitions/-"
+        );
+        assert_eq!(patch[0]["value"]["id"], 31);
+        assert_eq!(patch[0]["value"]["dimension"], 1);
+        assert_eq!(patch[0]["value"]["disable"], false);
+        // 2) append id 31 to the set's partitions
+        assert_eq!(patch[1]["op"], "add");
+        assert_eq!(
+            patch[1]["path"],
+            "/spec/serverGroup/template/spec/sets/0/partitions/-"
+        );
+        assert_eq!(patch[1]["value"], 31);
+        // 3) replicas -> 2
+        assert_eq!(patch[2]["op"], "replace");
+        assert_eq!(patch[2]["path"], "/spec/serverGroup/template/spec/sets/0/replicas");
+        assert_eq!(patch[2]["value"], 2);
+    }
+
+    #[test]
+    fn add_plan_increments_global_id_and_dimension_on_second_add() {
+        // After one add (ids up to 31, Survival_1 has dims 0 and 1), a further add
+        // must go to id 32 / dimension 2.
+        let mut v = bg_full(30, 1);
+        // simulate the first add already applied
+        let parts = v
+            .pointer_mut("/spec/database/template/spec/deployment/spec/worldPartitions/0/partitions")
+            .unwrap()
+            .as_array_mut()
+            .unwrap();
+        parts.push(json!({ "dimension": 1, "disable": false, "id": 31,
+                           "maxX": 1, "maxY": 1, "minX": 0, "minY": 0 }));
+        let plan = plan_add_sietch(&v, "Survival_1").unwrap();
+        assert_eq!(plan.new_partition_id, 32);
+        assert_eq!(plan.new_dimension, 2);
     }
 }
