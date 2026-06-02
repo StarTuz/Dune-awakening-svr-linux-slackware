@@ -303,6 +303,9 @@ pub enum SietchesCommand {
         /// Unique display name for the new Sietch (recommended — avoids duplicate names)
         #[arg(long)]
         name: Option<String>,
+        /// Join password for the new Sietch (recommended for a private/test Sietch)
+        #[arg(long)]
+        password: Option<String>,
         /// Apply without the confirmation gate
         #[arg(long)]
         yes: bool,
@@ -312,6 +315,30 @@ pub enum SietchesCommand {
         /// Skip the automatic pre-change backup
         #[arg(long)]
         skip_backup: bool,
+    },
+    /// Remove a Sietch by world-partition id (refuses the primary/last Sietch)
+    Remove {
+        /// World-partition id of the Sietch to remove
+        partition_id: u32,
+        /// Apply without the confirmation gate
+        #[arg(long)]
+        yes: bool,
+        /// Show the CR patch without applying
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the automatic pre-change backup
+        #[arg(long)]
+        skip_backup: bool,
+    },
+    /// Set a Sietch's join password (by world-partition id)
+    Password {
+        /// World-partition id of the Sietch
+        partition_id: u32,
+        /// New join password (no ' or " characters)
+        password: String,
+        /// Apply without the confirmation gate
+        #[arg(long)]
+        yes: bool,
     },
     /// Set the number of active Sietches (replicas) for the primary map
     Scale {
@@ -809,12 +836,14 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
         }
         SietchesCommand::Add {
             name,
+            password,
             yes,
             dry_run,
             skip_backup,
         } => {
             if dry_run {
-                let (plan, patch) = sietches::add(cfg, name.as_deref(), true).await?;
+                let (plan, patch) =
+                    sietches::add(cfg, name.as_deref(), password.as_deref(), true).await?;
                 println!(
                     "Dry run — would add a Sietch to {} (active {} -> {}):",
                     plan.map,
@@ -842,7 +871,8 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
                 println!("Backing up before adding a Sietch...");
                 backup::run(cfg, false, None).await?;
             }
-            let (plan, _) = sietches::add(cfg, name.as_deref(), false).await?;
+            let (plan, _) =
+                sietches::add(cfg, name.as_deref(), password.as_deref(), false).await?;
             println!(
                 "Added Sietch to {}: world partition id={} (dimension {}); active Sietches now {}.",
                 plan.map, plan.new_partition_id, plan.new_dimension, plan.new_replicas
@@ -855,9 +885,60 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
                     plan.new_partition_id
                 ),
             }
+            if password.is_none() {
+                println!(
+                    "No --password given: this Sietch is PUBLIC and may appear in the server \
+                     browser. Lock it with `sietches password {} <pw>` if it should be private.",
+                    plan.new_partition_id
+                );
+            }
             println!(
                 "Each Sietch needs ~5 Gi RAM — verify headroom and that the new instance reaches Running."
             );
+            print_target_summary(cfg);
+        }
+        SietchesCommand::Remove {
+            partition_id,
+            yes,
+            dry_run,
+            skip_backup,
+        } => {
+            if dry_run {
+                let (plan, patch) = sietches::remove(cfg, partition_id, true).await?;
+                println!(
+                    "Dry run — would remove Sietch (partition id {}, dimension {}) from {}; \
+                     active Sietches -> {}:",
+                    plan.partition_id, plan.dimension, plan.map, plan.remaining_replicas
+                );
+                println!("CR patch:\n{patch}");
+                return Ok(());
+            }
+            if !yes {
+                anyhow::bail!(
+                    "refusing to remove a Sietch without --yes; rerun with --dry-run to inspect the CR patch first"
+                );
+            }
+            if !skip_backup {
+                println!("Backing up before removing a Sietch...");
+                backup::run(cfg, false, None).await?;
+            }
+            let (plan, _) = sietches::remove(cfg, partition_id, false).await?;
+            println!(
+                "Removed Sietch (partition id {}) from {}; active Sietches now {}.",
+                plan.partition_id, plan.map, plan.remaining_replicas
+            );
+            print_target_summary(cfg);
+        }
+        SietchesCommand::Password {
+            partition_id,
+            password,
+            yes,
+        } => {
+            if !yes {
+                anyhow::bail!("refusing to set a Sietch password without --yes");
+            }
+            sietches::set_password(cfg, partition_id, &password).await?;
+            println!("Join password set for Sietch (partition id {partition_id}).");
             print_target_summary(cfg);
         }
         SietchesCommand::Scale {

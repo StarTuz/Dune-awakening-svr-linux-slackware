@@ -1,7 +1,7 @@
 # dune-ctl Sietch Management — Design & Implementation Plan
 
-Status: **Phase 0 ✅ + Phase 1 ✅ + Phase 2 (add/scale/rename + naming) ✅;
-remove/TUI/capsule-mirror pending** (2026-06-02). Motivating case:
+Status: **Phase 0–2 ✅ (edit, list/capacity, add/scale/rename/password/remove +
+per-Sietch naming); TUI + capsule-mirror pending** (2026-06-02). Motivating case:
 `../PLANETOLOGIST-TRAINER-BUG.md` (a single-Sietch world blocks a quest whose
 recovery requires switching Sietches).
 
@@ -15,8 +15,15 @@ recovery requires switching Sietches).
   tests assert both the geometry patch and the naming patch reproduce bg-util's
   captured diffs exactly; verified live via `--dry-run`. Auto-backup + `--yes` +
   `--dry-run` on mutations.
-- **Pending:** per-Sietch passwords (`Bgd.ServerLoginPassword`, same shape),
-  `remove`, TUI, and capsule mirroring of Sietch topology.
+- Phase 2 (cont.): `sietches password <id>` (per-Sietch `Bgd.ServerLoginPassword`
+  via the same `-execcmds` shape — inferred by symmetry with the captured name
+  form), and `sietches remove <id>` (drops the worldPartitions entry, set
+  partition id, podSpecs entry; lowers replicas; refuses primary/last;
+  auto-backup). Pure plan/patch builders unit-tested.
+- **Pending:** TUI Sietches tab, and capsule mirroring of Sietch topology so a
+  cold-swap preserves it. Note: the password `-execcmds` form is inferred from
+  the name form (not separately captured by a bg-util diff); verify with one
+  bg-util round if exactness matters.
 
 ## Goal
 
