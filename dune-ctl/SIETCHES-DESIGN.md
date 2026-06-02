@@ -27,6 +27,18 @@ recovery requires switching Sietches).
   Sietch list; mutations stay in the CLI (where `--dry-run`/`--yes`/auto-backup
   guards live).
 
+### Stale `Stopping` phase after scale-down (handled in reporting)
+
+The server-operator latches a ServerSet's `status.phase` at `Stopping` after a
+scale-down (`sietches remove`/`scale`): it drives the set through `Stopping` to
+drop a replica and never resets `phase` once it settles at `ready == target >= 1`
+(observed live; an operator rollout-restart does NOT clear it — only a real
+`ready→0→1` transition, e.g. recreating the pod, does). Rather than recreate pods
+on every removal (disruptive), dune-ctl corrects this in **reporting**:
+`normalize_serverset_phase()` (battlegroup.rs) reports `Stopping` as `Running`
+only when `ready == target >= 1` (the latch signature); genuine stops
+(`target → 0`, or `ready < target`) are untouched. Unit-tested.
+
 ### Capsule handling (deliberate: warn, don't auto-mirror)
 
 Sietch mutations are LIVE-only and print a warning when the world is

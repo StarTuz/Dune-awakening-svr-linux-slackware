@@ -164,13 +164,14 @@ async fn enrich_from_serversets(cfg: &Config, maps: &mut [MapEntry]) -> Result<(
     for map in maps.iter_mut() {
         for item in &items {
             if item.pointer("/spec/map").and_then(|v| v.as_str()) == Some(&map.name) {
-                map.phase = item
+                let raw_phase = item
                     .pointer("/status/phase")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("Unknown")
-                    .to_string();
+                    .unwrap_or("Unknown");
                 map.ready_replicas = item.pointer("/status/readyReplicas").and_then(as_u32);
                 map.target_replicas = item.pointer("/status/targetReplicas").and_then(as_u32);
+                map.phase =
+                    normalize_serverset_phase(raw_phase, map.ready_replicas, map.target_replicas);
                 break;
             }
         }
@@ -179,6 +180,23 @@ async fn enrich_from_serversets(cfg: &Config, maps: &mut [MapEntry]) -> Result<(
         }
     }
     Ok(())
+}
+
+/// Correct a stale `Stopping` `status.phase` that the server-operator latches
+/// after a scale-down (e.g. `sietches remove`/`scale`): it transitions the set
+/// through `Stopping` to drop a replica and never resets `phase` once the set
+/// settles at `ready == target >= 1`. That signature is reported as `Running`
+/// for display. A genuine stop is left untouched: while draining, `target`
+/// drops toward 0 so `ready != target`, and once stopped `ready == target == 0`
+/// (so `ready >= 1` is false). All other phases pass through unchanged.
+fn normalize_serverset_phase(phase: &str, ready: Option<u32>, target: Option<u32>) -> String {
+    let latched_stopping =
+        phase == "Stopping" && ready.is_some() && ready == target && ready.unwrap_or(0) >= 1;
+    if latched_stopping {
+        "Running".to_string()
+    } else {
+        phase.to_string()
+    }
 }
 
 async fn enrich_from_serversetscales(cfg: &Config, maps: &mut [MapEntry]) -> Result<()> {
@@ -549,6 +567,33 @@ fn str_value(v: &Value) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn latched_stopping_after_scale_down_reads_as_running() {
+        // ServerSet settled at ready==target>=1 but phase stuck "Stopping"
+        // (the post-scale-down operator latch) → display as Running.
+        assert_eq!(normalize_serverset_phase("Stopping", Some(1), Some(1)), "Running");
+        assert_eq!(normalize_serverset_phase("Stopping", Some(2), Some(2)), "Running");
+    }
+
+    #[test]
+    fn genuine_stop_states_are_not_masked() {
+        // Fully stopped: ready==target==0 → keep Stopping.
+        assert_eq!(normalize_serverset_phase("Stopping", Some(0), Some(0)), "Stopping");
+        // Draining toward stop: target dropped to 0, ready not yet → keep Stopping.
+        assert_eq!(normalize_serverset_phase("Stopping", Some(1), Some(0)), "Stopping");
+        // Starting/not-yet-ready: ready < target → keep Stopping.
+        assert_eq!(normalize_serverset_phase("Stopping", Some(0), Some(1)), "Stopping");
+        // Missing counts → don't guess.
+        assert_eq!(normalize_serverset_phase("Stopping", None, None), "Stopping");
+    }
+
+    #[test]
+    fn non_stopping_phases_pass_through() {
+        assert_eq!(normalize_serverset_phase("Running", Some(1), Some(1)), "Running");
+        assert_eq!(normalize_serverset_phase("Initializing", Some(0), Some(1)), "Initializing");
+        assert_eq!(normalize_serverset_phase("Stopped", Some(0), Some(0)), "Stopped");
+    }
 
     #[test]
     fn parses_minservers_per_map() {
