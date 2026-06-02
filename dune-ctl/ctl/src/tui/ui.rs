@@ -61,6 +61,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         View::Settings => draw_settings_view(f, app, chunks[2]),
         View::Logs => draw_logs_view(f, app, chunks[2]),
         View::Backups => draw_backups_view(f, app, chunks[2]),
+        View::Sietches => draw_sietches_view(f, app, chunks[2]),
     }
     draw_log(f, app, chunks[3]);
     draw_hints(f, app, chunks[4]);
@@ -204,6 +205,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         View::Settings => 3,
         View::Logs => 4,
         View::Backups => 5,
+        View::Sietches => 6,
     };
     let titles = [
         "1 Worlds",
@@ -212,6 +214,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         "4 Settings",
         "5 Logs",
         "6 Backups",
+        "7 Sietches",
     ];
     f.render_widget(
         Tabs::new(titles)
@@ -400,6 +403,50 @@ fn draw_sietches_panel(f: &mut Frame, app: &App, area: Rect) {
     ]))
     .block(Block::default().borders(Borders::ALL).title(title));
     f.render_widget(table, area);
+}
+
+fn draw_sietches_view(f: &mut Frame, app: &App, area: Rect) {
+    let snap = app.snapshot.as_ref();
+    let primary = snap.and_then(|s| {
+        s.sietches
+            .iter()
+            .find(|x| x.primary)
+            .or_else(|| s.sietches.first())
+    });
+    let active = primary.map(|s| s.replicas).unwrap_or(0);
+    let slots = primary.map(|s| s.partitions.len()).unwrap_or(0);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(6), Constraint::Min(0)])
+        .split(area);
+
+    let mut lines = Vec::new();
+    if slots > 0 {
+        lines.push(Line::from(format!(
+            "Active Sietches: {active} / {slots} partition slot(s)"
+        )));
+    } else {
+        lines.push(Line::from(format!("Active Sietches: {active}")));
+    }
+    if slots <= 1 {
+        lines.push(
+            Line::from(
+                "Single-Sietch world (the quest-recovery 'switch Sietch' path needs >= 2).",
+            )
+            .style(Style::default().fg(Color::DarkGray)),
+        );
+    }
+    lines.push(Line::from(""));
+    lines.push(
+        Line::from(
+            "Manage via CLI: sietches add [--name N --password P] | scale <N> | remove <id> | rename <id> N | password <id> P | edit",
+        )
+        .style(Style::default().fg(Color::DarkGray)),
+    );
+    f.render_widget(panel("Sietch capacity", lines), chunks[0]);
+
+    draw_sietches_panel(f, app, chunks[1]);
 }
 
 fn sietch_display_name(app: &App, snap: Option<&HealthSnapshot>) -> Option<String> {
@@ -850,10 +897,13 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
             if app.backup_task.is_some() {
                 "[backup running...]  [q] quit"
             } else if !app.backup_entries.is_empty() {
-                "[↑/↓] select  [r] run  [d] delete  [e] cron  [K] keep  [X] rm schedule  [Tab/1] worlds  [q] quit"
+                "[↑/↓] select  [r] run  [d] delete  [e] cron  [K] keep  [X] rm schedule  [Tab/7] sietches  [q] quit"
             } else {
                 "[r] run backup  [e] schedule  [q] quit"
             }
+        }
+        View::Sietches => {
+            "[Tab/1] worlds  read-only: manage Sietches via the CLI (sietches add/scale/remove/rename/password/edit)  [r] refresh  [q] quit"
         }
     };
     f.render_widget(

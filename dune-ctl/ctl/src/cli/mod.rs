@@ -895,6 +895,7 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
             println!(
                 "Each Sietch needs ~5 Gi RAM — verify headroom and that the new instance reaches Running."
             );
+            warn_capsule_live_only(cfg);
             print_target_summary(cfg);
         }
         SietchesCommand::Remove {
@@ -927,6 +928,7 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
                 "Removed Sietch (partition id {}) from {}; active Sietches now {}.",
                 plan.partition_id, plan.map, plan.remaining_replicas
             );
+            warn_capsule_live_only(cfg);
             print_target_summary(cfg);
         }
         SietchesCommand::Password {
@@ -939,6 +941,7 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
             }
             sietches::set_password(cfg, partition_id, &password).await?;
             println!("Join password set for Sietch (partition id {partition_id}).");
+            warn_capsule_live_only(cfg);
             print_target_summary(cfg);
         }
         SietchesCommand::Scale {
@@ -964,6 +967,7 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
                 "Active Sietches set to {} (max {}) for {}.",
                 cap.active, cap.max, cap.map
             );
+            warn_capsule_live_only(cfg);
             print_target_summary(cfg);
         }
         SietchesCommand::Rename {
@@ -979,10 +983,25 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
                 "Sietch (partition id {}) display name set to {:?}.",
                 partition_id, name
             );
+            warn_capsule_live_only(cfg);
             print_target_summary(cfg);
         }
     }
     Ok(())
+}
+
+/// After a live Sietch-topology change, remind that capsule-backed worlds won't
+/// keep it across a cold-swap unless mirrored into the capsule source.
+fn warn_capsule_live_only(cfg: &Config) {
+    if cfg.has_capsule() {
+        println!(
+            "Note: this is a LIVE-only change. To keep it across a capsule cold-swap, mirror it \
+             into the capsule with:\n  KUBE_EDITOR=~/.dune/bin/bg-util  (edit) {}/battlegroup.yaml\n  \
+             i.e. `bg-util -f {}/battlegroup.yaml` and make the same edit.",
+            cfg.capsule_dir().display(),
+            cfg.capsule_dir().display()
+        );
+    }
 }
 
 fn selected_world_label(cfg: &Config) -> String {

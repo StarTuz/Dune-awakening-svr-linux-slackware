@@ -46,6 +46,7 @@ dune-ctl
 | `4` | Settings | Managed settings with local values; inline set/toggle/apply |
 | `5` | Logs | Two-pane: pod selector (left) + last N log lines (right) |
 | `6` | Backups | Bundle list with age/size; trigger backup run with streaming output |
+| `7` | Sietches | Sietch capacity (active / partition slots) + the Sietch list (read-only; mutate via the `sietches` CLI) |
 
 `Tab` cycles through all views in order. `q` quits from any view.
 
@@ -54,12 +55,12 @@ dune-ctl
 | Key | Action |
 |-----|--------|
 | `Tab` | Next view |
-| `1`–`6` | Jump to view |
+| `1`–`7` | Jump to view |
 | `r` | Refresh (re-fetches health snapshot and current view data) |
 | `q` | Quit |
 
 Tab `1` is the world selector. Use `↑`/`↓` there to switch capsules; the
-active world retargets immediately and tabs `2` through `6` follow that world.
+active world retargets immediately and tabs `2` through `7` follow that world.
 
 ### Dashboard keys
 

@@ -1,7 +1,10 @@
 # dune-ctl Sietch Management — Design & Implementation Plan
 
-Status: **Phase 0–2 ✅ (edit, list/capacity, add/scale/rename/password/remove +
-per-Sietch naming); TUI + capsule-mirror pending** (2026-06-02). Motivating case:
+Status: **Full parity ✅ (2026-06-02).** edit, list/capacity,
+add/scale/rename/password/remove + per-Sietch naming (CLI), a read-only TUI
+Sietches tab (`7`), and a capsule-staleness warning on mutations. Capsule
+auto-mirror is a deliberate non-goal (see "Capsule handling" below). Motivating
+case:
 `../PLANETOLOGIST-TRAINER-BUG.md` (a single-Sietch world blocks a quest whose
 recovery requires switching Sietches).
 
@@ -20,8 +23,21 @@ recovery requires switching Sietches).
   diff**), and `sietches remove <id>` (drops the worldPartitions entry, set
   partition id, podSpecs entry; lowers replicas; refuses primary/last;
   auto-backup). Pure plan/patch builders unit-tested.
-- **Pending:** TUI Sietches tab, and capsule mirroring of Sietch topology so a
-  cold-swap preserves it.
+- TUI: read-only Sietches tab (`7`) — capacity (active / partition slots) + the
+  Sietch list; mutations stay in the CLI (where `--dry-run`/`--yes`/auto-backup
+  guards live).
+
+### Capsule handling (deliberate: warn, don't auto-mirror)
+
+Sietch mutations are LIVE-only and print a warning when the world is
+capsule-backed, pointing to `bg-util -f <capsule>/battlegroup.yaml` to mirror the
+same edit. Automated mirroring was **declined**: the capsule `battlegroup.yaml`
+is applied via `kubectl apply -f` *and* parsed textually by `world-capsules.sh`
+(awk/grep on `ServiceAuthToken=`, image tags), so a structured rewrite would
+either need a YAML dep that reformats the generated 72 KB file (risking the shell
+parsers) or fragile string surgery. The official editor (`bg-util`) already edits
+that exact format safely, so manual mirror via `sietches edit` on the capsule is
+the recommended path.
 
 ## Goal
 

@@ -64,6 +64,7 @@ pub enum View {
     Settings,
     Logs,
     Backups,
+    Sietches,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -668,7 +669,8 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                     View::Maps => View::Settings,
                     View::Settings => View::Logs,
                     View::Logs => View::Backups,
-                    View::Backups => View::Worlds,
+                    View::Backups => View::Sietches,
+                    View::Sietches => View::Worlds,
                 };
             }
             KeyCode::Char('1') => app.view = View::Worlds,
@@ -677,6 +679,7 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
             KeyCode::Char('4') => app.view = View::Settings,
             KeyCode::Char('5') => app.view = View::Logs,
             KeyCode::Char('6') => app.view = View::Backups,
+            KeyCode::Char('7') => app.view = View::Sietches,
             KeyCode::Char('r') => {
                 app.push_log("refreshing...");
                 refresh_world_context(app);
@@ -702,7 +705,8 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 View::Maps => View::Settings,
                 View::Settings => View::Logs,
                 View::Logs => View::Backups,
-                View::Backups => View::Worlds,
+                View::Backups => View::Sietches,
+                View::Sietches => View::Worlds,
             };
             if app.view == View::Logs {
                 start_logs_refresh(app);
@@ -730,6 +734,9 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('6') => {
             app.view = View::Backups;
             start_backup_list_refresh(app);
+        }
+        KeyCode::Char('7') => {
+            app.view = View::Sietches;
         }
         KeyCode::Char('A') => {
             app.pending = Some(PendingAction::StartSietch);

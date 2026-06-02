@@ -236,8 +236,9 @@ dune-ctl --world Ixware public-ip show|check|set <ip>|apply-detected
 ### TUI
 
 Launching with no subcommand starts the TUI. Tabs: `1` Worlds, `2` Dashboard,
-`3` Maps, `4` Settings, `5` Logs, `6` Backups. Global keys: `Tab` cycles,
-`1`–`6` jump, `r` refresh, `q` quit. Tab `1` is the world/capsule selector —
+`3` Maps, `4` Settings, `5` Logs, `6` Backups, `7` Sietches (read-only capacity +
+list; mutate via the `sietches` CLI). Global keys: `Tab` cycles, `1`–`7` jump,
+`r` refresh, `q` quit. Tab `1` is the world/capsule selector —
 switching there retargets the rest of the TUI. Full keymap in
 `dune-ctl/OPERATIONS.md`.
 
