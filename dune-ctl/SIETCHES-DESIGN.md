@@ -16,14 +16,12 @@ recovery requires switching Sietches).
   captured diffs exactly; verified live via `--dry-run`. Auto-backup + `--yes` +
   `--dry-run` on mutations.
 - Phase 2 (cont.): `sietches password <id>` (per-Sietch `Bgd.ServerLoginPassword`
-  via the same `-execcmds` shape — inferred by symmetry with the captured name
-  form), and `sietches remove <id>` (drops the worldPartitions entry, set
+  via the same `-execcmds` shape — **confirmed byte-exact by a captured bg-util
+  diff**), and `sietches remove <id>` (drops the worldPartitions entry, set
   partition id, podSpecs entry; lowers replicas; refuses primary/last;
   auto-backup). Pure plan/patch builders unit-tested.
 - **Pending:** TUI Sietches tab, and capsule mirroring of Sietch topology so a
-  cold-swap preserves it. Note: the password `-execcmds` form is inferred from
-  the name form (not separately captured by a bg-util diff); verify with one
-  bg-util round if exactness matters.
+  cold-swap preserves it.
 
 ## Goal
 
@@ -202,9 +200,19 @@ podSpecs:
 
 So a unique name = append a podSpecs entry with `index = <partition id>` and an
 argument `-execcmds="Bgd.ServerDisplayName '<name>'"` (single-quoted value; name
-must not contain `'` or `"`). Password is the same shape with
-`Bgd.ServerLoginPassword`. bg-util omits `map` in the entry. `add --name` and
-`rename` are implemented against this.
+must not contain `'` or `"`). **Password confirmed (separate bg-util round) to be
+the identical shape** with `Bgd.ServerLoginPassword`, in the same
+`podSpecs[index].arguments`:
+
+```yaml
+podSpecs:
+- index: 31
+  arguments:
+  - -execcmds="Bgd.ServerLoginPassword 'Test'"
+```
+
+bg-util omits `map` in the entry. `add --name`/`--password`, `rename`, and
+`password` are implemented against these captured forms.
 
 ## Risks / open questions
 
