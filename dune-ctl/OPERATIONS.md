@@ -223,20 +223,24 @@ dune-ctl sietches list        # Sietch table with phase/ready/players/port
 dune-ctl sietches start       # start the primary Sietch
 dune-ctl sietches stop        # stop the primary Sietch
 dune-ctl sietches restart     # rolling restart of the primary Sietch
-dune-ctl sietches add  [--dry-run] [--yes] [--skip-backup]   # provision a Sietch (partition + active+1)
+dune-ctl sietches add [--name "Sietch X"] [--dry-run] [--yes] [--skip-backup]  # provision a Sietch
 dune-ctl sietches scale <N> [--dry-run] [--yes]              # set active Sietches (must be <= partitions)
+dune-ctl sietches rename <partition-id> "Sietch X" --yes     # set a Sietch's display name
 dune-ctl sietches edit        # Battlegroup Editor (bg-util): dimensions/Sietches, names, memory
 dune-ctl sietches edit --advanced   # raw BattleGroup YAML in the default editor
 ```
 
 `sietches add` reproduces bg-util's add-a-Sietch exactly (verified by CR diff):
 appends a `worldPartitions` entry (`dimension = max+1`, `id = global max + 1`,
-copied grid), adds the id to the set's `partitions`, and raises `replicas`. It
+copied grid), adds the id to the set's `partitions`, raises `replicas`, and — with
+`--name` — attaches a `podSpecs` entry (`index = <partition id>`,
+`-execcmds="Bgd.ServerDisplayName '<name>'"`) so the Sietch has a unique name. It
 auto-backs-up first (skip with `--skip-backup`) and requires `--yes`; preview the
 CR patch with `--dry-run`. `sietches scale` enforces `active <= worldPartitions`
-count (a bare replicas bump beyond that crash-loops). Per-Sietch unique
-names/passwords (`sets[i].podSpecs[]`) and `remove`/`rename` are pending — see
-`SIETCHES-DESIGN.md`; use `sietches edit` (bg-util) for naming meanwhile.
+count (a bare replicas bump beyond that crash-loops). `sietches rename` sets an
+existing Sietch's display name by world-partition id (preserving its other
+per-pod arguments). Still pending: per-Sietch passwords, `remove`, TUI — see
+`SIETCHES-DESIGN.md`.
 
 `sietches edit` launches Funcom's Battlegroup Editor (`bg-util`) as
 `KUBE_EDITOR` on `kubectl edit battlegroup` — the supported way to add/manage

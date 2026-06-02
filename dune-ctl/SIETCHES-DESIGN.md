@@ -1,19 +1,22 @@
 # dune-ctl Sietch Management — Design & Implementation Plan
 
-Status: **Phase 0 ✅ + Phase 1 ✅ + Phase 2 core ✅; naming/remove/rename pending**
-(2026-06-02). Motivating case: `../PLANETOLOGIST-TRAINER-BUG.md` (a single-Sietch
-world blocks a quest whose recovery requires switching Sietches).
+Status: **Phase 0 ✅ + Phase 1 ✅ + Phase 2 (add/scale/rename + naming) ✅;
+remove/TUI/capsule-mirror pending** (2026-06-02). Motivating case:
+`../PLANETOLOGIST-TRAINER-BUG.md` (a single-Sietch world blocks a quest whose
+recovery requires switching Sietches).
 
 - Phase 0: `sietches edit [--advanced]` wraps `bg-util` (`core/src/sietches.rs::edit`).
 - Phase 1: `sietches list` shows capacity (`active`/`max` = enabled
   `worldPartitions`) with a single-Sietch hint (`core/src/sietches.rs::capacity`).
-- Phase 2 core: `sietches add` (`plan_add_sietch`/`build_add_patch`) + `sietches
-  scale` (active ≤ max invariant). Unit tests assert `add` reproduces bg-util's
-  captured diff exactly (id 31 / dimension 1 / replicas 2); verified live via
-  `--dry-run`. Auto-backup + `--yes` + `--dry-run` on `add`.
-- **Pending:** per-Sietch unique name/password (`sets[i].podSpecs[]` — needs one
-  captured bg-util example to confirm the `index`/arg form), `remove`, `rename`,
-  TUI, and capsule mirroring of Sietch topology.
+- Phase 2: `sietches add [--name]` (`plan_add_sietch`/`build_add_patch`),
+  `sietches scale` (active ≤ max invariant), `sietches rename <partition-id>`.
+  Per-Sietch naming writes the decoded `podSpecs` form
+  (`index`=<partition id>, `-execcmds="Bgd.ServerDisplayName '<name>'"`). Unit
+  tests assert both the geometry patch and the naming patch reproduce bg-util's
+  captured diffs exactly; verified live via `--dry-run`. Auto-backup + `--yes` +
+  `--dry-run` on mutations.
+- **Pending:** per-Sietch passwords (`Bgd.ServerLoginPassword`, same shape),
+  `remove`, TUI, and capsule mirroring of Sietch topology.
 
 ## Goal
 
@@ -180,12 +183,21 @@ This is precisely what our manual `replicas`-only bump lacked (no matching
 partition/dimension → crash). `plan_add_sietch`/`build_add_patch` reproduce this
 exact output under unit test.
 
-**Per-Sietch name/password** = `sets[i].podSpecs[]` entries (CRD `ServerPodSpec`:
-`index` (pod index), `map`, per-pod `arguments`). A unique name is a podSpecs
-`arguments` override (`-ini:engine:...:Bgd.ServerDisplayName=...`). The exact
-arg/`index` form still needs one captured bg-util example (the decode round set
-no name), so `rename`/`add --name` are deferred until that is confirmed — do not
-guess the `index` value.
+**Per-Sietch name/password — DECODED (2026-06-02, 2nd bg-util round):** a
+`sets[i].podSpecs[]` entry:
+
+```yaml
+podSpecs:
+- index: 31                                          # = the partition id (NOT the dimension)
+  arguments:
+  - -execcmds="Bgd.ServerDisplayName 'Sietch Tarball'"
+```
+
+So a unique name = append a podSpecs entry with `index = <partition id>` and an
+argument `-execcmds="Bgd.ServerDisplayName '<name>'"` (single-quoted value; name
+must not contain `'` or `"`). Password is the same shape with
+`Bgd.ServerLoginPassword`. bg-util omits `map` in the entry. `add --name` and
+`rename` are implemented against this.
 
 ## Risks / open questions
 

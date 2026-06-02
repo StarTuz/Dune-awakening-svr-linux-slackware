@@ -300,6 +300,9 @@ pub enum SietchesCommand {
     },
     /// Add a Sietch (provisions a world partition + raises the active count)
     Add {
+        /// Unique display name for the new Sietch (recommended — avoids duplicate names)
+        #[arg(long)]
+        name: Option<String>,
         /// Apply without the confirmation gate
         #[arg(long)]
         yes: bool,
@@ -320,6 +323,16 @@ pub enum SietchesCommand {
         /// Show the result without applying
         #[arg(long)]
         dry_run: bool,
+    },
+    /// Set a Sietch's display name (by world-partition id; see the id from `add`)
+    Rename {
+        /// World-partition id of the Sietch to rename
+        partition_id: u32,
+        /// New display name (no ' or " characters)
+        name: String,
+        /// Apply without the confirmation gate
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -795,12 +808,13 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
             sietches::edit(cfg, advanced).await?;
         }
         SietchesCommand::Add {
+            name,
             yes,
             dry_run,
             skip_backup,
         } => {
             if dry_run {
-                let (plan, patch) = sietches::add(cfg, true).await?;
+                let (plan, patch) = sietches::add(cfg, name.as_deref(), true).await?;
                 println!(
                     "Dry run — would add a Sietch to {} (active {} -> {}):",
                     plan.map,
@@ -828,15 +842,21 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
                 println!("Backing up before adding a Sietch...");
                 backup::run(cfg, false, None).await?;
             }
-            let (plan, _) = sietches::add(cfg, false).await?;
+            let (plan, _) = sietches::add(cfg, name.as_deref(), false).await?;
             println!(
                 "Added Sietch to {}: world partition id={} (dimension {}); active Sietches now {}.",
                 plan.map, plan.new_partition_id, plan.new_dimension, plan.new_replicas
             );
+            match &name {
+                Some(n) => println!("Display name: {n:?} (partition id {}).", plan.new_partition_id),
+                None => println!(
+                    "No --name given: this Sietch shares the world's display name. \
+                     Set one with `sietches rename {} <name>`.",
+                    plan.new_partition_id
+                ),
+            }
             println!(
-                "Note: the new Sietch inherits the world's shared display name until per-Sietch \
-                 naming lands (see dune-ctl/SIETCHES-DESIGN.md). Each Sietch needs ~5 Gi RAM — \
-                 verify headroom and that the new instance reaches Running."
+                "Each Sietch needs ~5 Gi RAM — verify headroom and that the new instance reaches Running."
             );
             print_target_summary(cfg);
         }
@@ -862,6 +882,21 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
             println!(
                 "Active Sietches set to {} (max {}) for {}.",
                 cap.active, cap.max, cap.map
+            );
+            print_target_summary(cfg);
+        }
+        SietchesCommand::Rename {
+            partition_id,
+            name,
+            yes,
+        } => {
+            if !yes {
+                anyhow::bail!("refusing to rename Sietch without --yes");
+            }
+            sietches::rename(cfg, partition_id, &name).await?;
+            println!(
+                "Sietch (partition id {}) display name set to {:?}.",
+                partition_id, name
             );
             print_target_summary(cfg);
         }

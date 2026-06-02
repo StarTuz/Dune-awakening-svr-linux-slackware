@@ -28,6 +28,26 @@ pub struct AddSietchPlan {
     pub max_x: i64,
     pub min_y: i64,
     pub max_y: i64,
+    /// Whether the set already has a `podSpecs` array (decides the JSON-patch op
+    /// used when attaching a per-Sietch name).
+    pub set_has_podspecs: bool,
+}
+
+/// The `-execcmds=...` argument bg-util writes to give a Sietch a unique display
+/// name (verified against a captured diff). Names may not contain `'` or `"`.
+fn display_name_arg(name: &str) -> Result<String> {
+    if name.contains('\'') || name.contains('"') {
+        anyhow::bail!("Sietch name must not contain ' or \" characters");
+    }
+    if name.trim().is_empty() {
+        anyhow::bail!("Sietch name must not be empty");
+    }
+    Ok(format!("-execcmds=\"Bgd.ServerDisplayName '{name}'\""))
+}
+
+/// True if an argument string sets `Bgd.ServerDisplayName` via `-execcmds`.
+fn is_display_name_arg(arg: &str) -> bool {
+    arg.starts_with("-execcmds=") && arg.contains("Bgd.ServerDisplayName")
 }
 
 /// Compute the add-Sietch plan for `map` from the BattleGroup JSON.
@@ -96,11 +116,17 @@ fn plan_add_sietch(bg: &Value, map: &str) -> Result<AddSietchPlan> {
         max_x: grid("maxX", 1),
         min_y: grid("minY", 0),
         max_y: grid("maxY", 1),
+        set_has_podspecs: sets[set_index]
+            .get("podSpecs")
+            .and_then(|v| v.as_array())
+            .is_some(),
     })
 }
 
-/// Build the RFC-6902 JSON patch that realises an [`AddSietchPlan`].
-fn build_add_patch(plan: &AddSietchPlan) -> Vec<Value> {
+/// Build the RFC-6902 JSON patch that realises an [`AddSietchPlan`]. When `name`
+/// is given, also attach a `podSpecs` entry binding that name to the new Sietch's
+/// partition id (mirrors bg-util).
+fn build_add_patch(plan: &AddSietchPlan, name: Option<&str>) -> Result<Vec<Value>> {
     let new_partition = json!({
         "dimension": plan.new_dimension,
         "disable": false,
@@ -110,7 +136,7 @@ fn build_add_patch(plan: &AddSietchPlan) -> Vec<Value> {
         "minX": plan.min_x,
         "minY": plan.min_y,
     });
-    vec![
+    let mut ops = vec![
         json!({
             "op": "add",
             "path": format!("{}/{}/partitions/-", WORLD_PARTITIONS_PTR, plan.worldpartitions_index),
@@ -126,18 +152,42 @@ fn build_add_patch(plan: &AddSietchPlan) -> Vec<Value> {
             "path": format!("{}/{}/replicas", SETS_PTR, plan.set_index),
             "value": plan.new_replicas,
         }),
-    ]
+    ];
+    if let Some(name) = name {
+        let entry = json!({
+            "index": plan.new_partition_id,
+            "arguments": [display_name_arg(name)?],
+        });
+        if plan.set_has_podspecs {
+            ops.push(json!({
+                "op": "add",
+                "path": format!("{}/{}/podSpecs/-", SETS_PTR, plan.set_index),
+                "value": entry,
+            }));
+        } else {
+            ops.push(json!({
+                "op": "add",
+                "path": format!("{}/{}/podSpecs", SETS_PTR, plan.set_index),
+                "value": [entry],
+            }));
+        }
+    }
+    Ok(ops)
 }
 
 /// Add a Sietch to the primary Sietch map. Returns the plan (also usable for a
 /// dry-run preview). Does NOT take a backup itself — callers should back up first
-/// (the CLI does). Per-Sietch naming is not yet wired (see `SIETCHES-DESIGN.md`),
-/// so the new Sietch inherits the world's shared `ServerDisplayName` until then.
-pub async fn add(cfg: &Config, dry_run: bool) -> Result<(AddSietchPlan, String)> {
+/// (the CLI does). When `name` is given, the new Sietch gets a unique display
+/// name (`podSpecs`); otherwise it inherits the world's shared name.
+pub async fn add(
+    cfg: &Config,
+    name: Option<&str>,
+    dry_run: bool,
+) -> Result<(AddSietchPlan, String)> {
     let bg =
         kubectl::get_json(&["get", "battlegroup", &cfg.battlegroup, "-n", &cfg.namespace]).await?;
     let plan = plan_add_sietch(&bg, PRIMARY_SIETCH_MAP)?;
-    let patch = build_add_patch(&plan);
+    let patch = build_add_patch(&plan, name)?;
     let patch_json = serde_json::to_string_pretty(&patch)?;
     if dry_run {
         return Ok((plan, patch_json));
@@ -153,6 +203,91 @@ pub async fn add(cfg: &Config, dry_run: bool) -> Result<(AddSietchPlan, String)>
     ])
     .await?;
     Ok((plan, patch_json))
+}
+
+/// Set (or change) the display name of an existing Sietch, identified by its
+/// world-partition id. Adds or updates the set's `podSpecs` entry for that
+/// partition, preserving any non-name arguments already on it.
+pub async fn rename(cfg: &Config, partition_id: u32, new_name: &str) -> Result<()> {
+    let new_arg = display_name_arg(new_name)?;
+    let bg =
+        kubectl::get_json(&["get", "battlegroup", &cfg.battlegroup, "-n", &cfg.namespace]).await?;
+
+    let sets = bg
+        .pointer(SETS_PTR)
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("serverGroup sets not found"))?;
+    let set_index = sets
+        .iter()
+        .position(|s| s.get("map").and_then(|m| m.as_str()) == Some(PRIMARY_SIETCH_MAP))
+        .ok_or_else(|| anyhow::anyhow!("{} not found in sets", PRIMARY_SIETCH_MAP))?;
+    let set = &sets[set_index];
+
+    // Validate the partition id belongs to this set.
+    let in_set = set
+        .get("partitions")
+        .and_then(|p| p.as_array())
+        .map(|ps| ps.iter().filter_map(|v| v.as_u64()).any(|v| v as u32 == partition_id))
+        .unwrap_or(false);
+    if !in_set {
+        anyhow::bail!(
+            "partition id {} is not a Sietch of {} (see `sietches list`)",
+            partition_id,
+            PRIMARY_SIETCH_MAP
+        );
+    }
+
+    let podspecs = set.get("podSpecs").and_then(|v| v.as_array());
+    let existing_idx = podspecs.and_then(|ps| {
+        ps.iter()
+            .position(|e| e.get("index").and_then(|i| i.as_u64()).map(|i| i as u32) == Some(partition_id))
+    });
+
+    let patch = match (podspecs, existing_idx) {
+        // Existing podSpec for this partition: rebuild its args (drop old name arg, keep the rest).
+        (Some(ps), Some(i)) => {
+            let mut args: Vec<Value> = ps[i]
+                .get("arguments")
+                .and_then(|a| a.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter(|v| !v.as_str().map(is_display_name_arg).unwrap_or(false))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            args.push(Value::String(new_arg));
+            json!([{
+                "op": "replace",
+                "path": format!("{}/{}/podSpecs/{}/arguments", SETS_PTR, set_index, i),
+                "value": args,
+            }])
+        }
+        // podSpecs array exists but no entry for this partition: append one.
+        (Some(_), None) => json!([{
+            "op": "add",
+            "path": format!("{}/{}/podSpecs/-", SETS_PTR, set_index),
+            "value": { "index": partition_id, "arguments": [new_arg] },
+        }]),
+        // No podSpecs array yet: create it.
+        (None, _) => json!([{
+            "op": "add",
+            "path": format!("{}/{}/podSpecs", SETS_PTR, set_index),
+            "value": [{ "index": partition_id, "arguments": [new_arg] }],
+        }]),
+    };
+
+    kubectl::run(&[
+        "patch",
+        "battlegroup",
+        &cfg.battlegroup,
+        "-n",
+        &cfg.namespace,
+        "--type=json",
+        &format!("-p={}", serde_json::to_string(&patch)?),
+    ])
+    .await?;
+    Ok(())
 }
 
 /// Set the number of active Sietches (`sets[i].replicas`) for the primary map.
@@ -438,7 +573,8 @@ mod tests {
     fn add_patch_matches_bg_util_diff() {
         let v = bg_full(30, 1);
         let plan = plan_add_sietch(&v, "Survival_1").unwrap();
-        let patch = build_add_patch(&plan);
+        assert!(!plan.set_has_podspecs);
+        let patch = build_add_patch(&plan, None).unwrap();
         assert_eq!(patch.len(), 3);
         // 1) append the new partition object to worldPartitions[0].partitions
         assert_eq!(patch[0]["op"], "add");
@@ -460,6 +596,31 @@ mod tests {
         assert_eq!(patch[2]["op"], "replace");
         assert_eq!(patch[2]["path"], "/spec/serverGroup/template/spec/sets/0/replicas");
         assert_eq!(patch[2]["value"], 2);
+    }
+
+    #[test]
+    fn add_patch_with_name_appends_podspecs() {
+        let v = bg_full(30, 1);
+        let plan = plan_add_sietch(&v, "Survival_1").unwrap();
+        let patch = build_add_patch(&plan, Some("Sietch Testbed")).unwrap();
+        assert_eq!(patch.len(), 4);
+        // set has no podSpecs yet → create the array at /podSpecs
+        assert_eq!(patch[3]["op"], "add");
+        assert_eq!(patch[3]["path"], "/spec/serverGroup/template/spec/sets/0/podSpecs");
+        let entry = &patch[3]["value"][0];
+        assert_eq!(entry["index"], 31); // index = new partition id
+        assert_eq!(
+            entry["arguments"][0],
+            "-execcmds=\"Bgd.ServerDisplayName 'Sietch Testbed'\""
+        );
+    }
+
+    #[test]
+    fn name_with_quote_is_rejected() {
+        assert!(display_name_arg("Bad'Name").is_err());
+        assert!(display_name_arg("Bad\"Name").is_err());
+        assert!(display_name_arg("  ").is_err());
+        assert!(display_name_arg("Sietch Tarball").is_ok());
     }
 
     #[test]
