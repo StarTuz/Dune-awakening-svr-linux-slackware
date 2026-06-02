@@ -223,7 +223,16 @@ dune-ctl sietches list        # Sietch table with phase/ready/players/port
 dune-ctl sietches start       # start the primary Sietch
 dune-ctl sietches stop        # stop the primary Sietch
 dune-ctl sietches restart     # rolling restart of the primary Sietch
+dune-ctl sietches edit        # Battlegroup Editor (bg-util): dimensions/Sietches, names, memory
+dune-ctl sietches edit --advanced   # raw BattleGroup YAML in the default editor
 ```
+
+`sietches edit` launches Funcom's Battlegroup Editor (`bg-util`) as
+`KUBE_EDITOR` on `kubectl edit battlegroup` — the supported way to add/manage
+Sietches (world "dimensions"), per-Sietch names/passwords, and per-map memory.
+Key rule it enforces: a map's max Sietches = its `worldPartitions` count, and
+active `replicas` must be ≤ that count (a bare replica bump crash-loops). Native
+`sietches add|remove|scale|rename` are planned — see `SIETCHES-DESIGN.md`.
 
 ### `dune-ctl battlegroup`
 

@@ -178,6 +178,8 @@ use.
   `backup.rs`, `capsules.rs`, `public_ip.rs`, `fls.rs`, `health.rs`, etc.) and
   `dune-ctl/ctl/src/{cli,tui,web}/`
 - Full reference: `dune-ctl/OPERATIONS.md`
+- Sietch (instance) management design/plan: `dune-ctl/SIETCHES-DESIGN.md`
+  (matching Funcom's Battlegroup Editor `bg-util`; see `PLANETOLOGIST-TRAINER-BUG.md`)
 
 ### World targeting
 

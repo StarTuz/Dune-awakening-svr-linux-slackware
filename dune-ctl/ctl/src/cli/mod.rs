@@ -292,6 +292,12 @@ pub enum SietchesCommand {
     Stop,
     /// Restart the selected world's primary Sietch
     Restart,
+    /// Open the Battlegroup Editor (bg-util) to manage Sietches/dimensions, names, and memory
+    Edit {
+        /// Open the raw BattleGroup YAML in the default editor instead of bg-util
+        #[arg(long)]
+        advanced: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -681,6 +687,24 @@ fn world_settings_dir(battlegroup: &str) -> std::path::PathBuf {
 async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
     match action {
         SietchesCommand::List => {
+            match sietches::capacity(cfg).await {
+                Ok(cap) => {
+                    println!(
+                        "Capacity: {} of {} Sietch(es) active for {} (max = enabled worldPartitions).",
+                        cap.active, cap.max, cap.map
+                    );
+                    if cap.max <= 1 {
+                        println!(
+                            "Single-Sietch world. Add a Sietch with `dune-ctl --world {} sietches edit` \
+                             (bg-util: raise worldPartitions, set active ≤ count, give it a unique name).",
+                            cfg.title.as_deref().unwrap_or(&cfg.battlegroup)
+                        );
+                    }
+                    println!();
+                }
+                Err(e) => eprintln!("warning: could not read Sietch capacity: {e}"),
+            }
+
             let snap = HealthSnapshot::collect(cfg).await?;
             println!(
                 "{:<18} {:<14} {:<12} {:<8} {:<8} {:<6} State",
@@ -732,6 +756,20 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
             );
             print_target_summary(cfg);
             println!("Follow-up   : verify gateway patch and server browser after rollout.");
+        }
+        SietchesCommand::Edit { advanced } => {
+            if advanced {
+                println!(
+                    "Opening raw BattleGroup YAML for {} (default editor). Save and exit to apply.",
+                    selected_world_label(cfg)
+                );
+            } else {
+                println!(
+                    "Opening Battlegroup Editor (bg-util) for {}. Edit dimensions/Sietches, names, and memory; save and exit to apply.",
+                    selected_world_label(cfg)
+                );
+            }
+            sietches::edit(cfg, advanced).await?;
         }
     }
     Ok(())
