@@ -26,9 +26,11 @@ system shape and control loops. `FILE-LOCATIONS.md` indexes important paths.
 
 ## Important Operational Notes
 
-- Re-run `~/dune-server/scripts/gateway-patch.sh` after every battlegroup
-  restart or update. The operator can regenerate the gateway deployment and
-  lose `--RMQGameHttpPort=30196`.
+- The gateway "patch" is retired (2026-06-02). The gateway `--RMQGameHostname`
+  is operator-managed from the k3s `node-external-ip`, so no per-restart patch is
+  needed; verify the advertised IP with `dune-ctl preflight` (the "gateway IP"
+  row). Rotating the public IP requires updating `node-external-ip` — see
+  `PUBLIC-IP.md`.
 - Start and stop maps only with `~/dune-server/scripts/map-toggle.sh` or
   `dune-ctl maps start|stop`. Do not patch `ServerSet` or `ServerGroup`
   replicas directly.
@@ -65,7 +67,6 @@ sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db353
 # Planned shutdown / restart / update
 ~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware shutdown --yes
 ~/dune-server/server/scripts/battlegroup.sh restart
-~/dune-server/scripts/gateway-patch.sh
 ~/dune-server/scripts/update.sh
 ~/dune-server/scripts/update.sh --skip-backup --skip-stop --start-after  # resume after backup+stop already completed
 ~/dune-server/scripts/update.sh --post-update-only --start-after          # resume after Funcom update completed
@@ -216,7 +217,6 @@ dune-ctl backup restore --yes <timestamp>   # restore (stop battlegroup first)
 dune-ctl players                      # table of online players
 
 # Update/security helpers
-dune-ctl --world Ixware gateway-patch
 ~/dune-server/scripts/update.sh --start-after
 ~/dune-server/scripts/security-audit.sh
 sudo ~/dune-server/scripts/resource-snapshot.sh known-good-YYYYMMDD-resources

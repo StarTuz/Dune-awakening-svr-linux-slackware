@@ -76,7 +76,7 @@ Important zones:
 Important custom firewalld services:
 
 - `dune-game`: UDP `7782-7790`
-- `dune-rmq`: TCP `31982` and `30196`
+- `dune-rmq`: TCP `31982` (RMQ game AMQP; the dead `30196` was removed 2026-06-02)
 - `conan-exiles`: Conan UDP/TCP ports
 
 The public zone must not expose Director, Filebrowser, Postgres, the k3s API, or
@@ -197,18 +197,13 @@ Inside the battlegroup namespace:
 - Filebrowser provides a browser-accessible file utility.
 - Game server pods run maps such as `Survival_1` and `Overmap`.
 
-The gateway patch is currently required because the gateway discovers the AMQP
-NodePort but not the RabbitMQ HTTP NodePort. The local patch adds:
-
-```text
---RMQGameHttpPort=30196
-```
-
-Re-run after restarts or updates:
-
-```sh
-~/dune-server/scripts/gateway-patch.sh
-```
+The gateway advertises its public RMQ endpoint to FLS via `--RMQGameHostname`,
+which the **server-operator derives from the k3s Node ExternalIP**
+(`node-external-ip` in `/etc/rancher/k3s/config.yaml`). There is no manual gateway
+patch: the old `--RMQGameHttpPort=30196` arg was retired 2026-06-02 (the RMQ
+management HTTP address is off the gameplay path and the port was stale). Verify
+the advertised IP with `dune-ctl preflight` (the "gateway IP" row); rotate it via
+`PUBLIC-IP.md` (which updates `node-external-ip`).
 
 ## Map Lifecycle
 
@@ -402,7 +397,7 @@ The live deployment diverges from Funcom's expected VM in these ways:
 - `FirewallBackend=iptables`.
 - No `table inet firewalld` when firewalld backend is iptables.
 - Dune UDP `7782-7790` allowed by firewalld and router.
-- Gateway has `--RMQGameHttpPort=30196`.
+- Gateway `--RMQGameHostname` matches the public IP (operator-derived from k3s `node-external-ip`).
 - Maps are started/stopped only with `map-toggle.sh`.
 - DeepDesert must be cleanly on or cleanly off.
 - Do not use the removed S2S watchdog or Farm-session timing workaround.

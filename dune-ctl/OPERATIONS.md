@@ -265,7 +265,9 @@ dune-ctl battlegroup restart
 ```
 
 Operates the entire battlegroup, not individual maps. After a restart, run
-`dune-ctl gateway-patch` to reapply the RMQ port argument.
+`dune-ctl preflight` and check the "gateway IP" row — the gateway's advertised
+`--RMQGameHostname` is operator-managed from the k3s `node-external-ip`, so no
+manual gateway patch is needed.
 
 ### `dune-ctl shutdown`
 
@@ -352,13 +354,13 @@ presence, and other deployment-specific invariants.
 ### `dune-ctl update`
 
 Full update pipeline: SteamCMD prefetch → funcom-patches → Funcom update →
-gateway patch. Streams output live.
+capsule apply → start → wait-ready. Streams output live.
 
-### `dune-ctl gateway-patch`
-
-Reapplies `--RMQGameHttpPort=30196` to the gateway Deployment. Idempotent.
-Required after any battlegroup restart because the gateway Deployment is
-recreated.
+> **Retired:** `dune-ctl gateway-patch` (and `scripts/gateway-patch.sh`) were
+> removed 2026-06-02. The gateway `--RMQGameHostname` is operator-managed from the
+> k3s `node-external-ip`, and the old `--RMQGameHttpPort=30196` arg was
+> unnecessary and stale. Use `dune-ctl preflight` (the "gateway IP" row) to verify
+> the advertised IP; rotate it via `PUBLIC-IP.md`.
 
 ### `dune-ctl token-check`
 
@@ -471,9 +473,9 @@ dune-ctl battlegroup stop
 # 3. Restore (--yes required)
 dune-ctl backup restore --yes <timestamp>
 
-# 4. Start and re-patch
+# 4. Start and verify
 dune-ctl battlegroup start
-dune-ctl gateway-patch
+dune-ctl preflight        # check the "gateway IP" row
 dune-ctl status
 ```
 
