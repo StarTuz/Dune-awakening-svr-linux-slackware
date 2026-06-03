@@ -98,9 +98,9 @@ classify_sensitive_service() {
     if [[ "$service" == *mq-game-svc ]] && [ "$target_port" = "5672" ] && [ "$node_port" = "31982" ]; then
         return 1
     fi
-    if [[ "$service" == *mq-game-svc ]] && [ "$target_port" = "15672" ] && [ "$node_port" = "30196" ]; then
-        return 1
-    fi
+    # The mq-game management HTTP port (15672) is NOT intentionally public — it
+    # is RabbitMQ's admin API. It falls through to the *:15672:* sensitive rule
+    # below. (Historically whitelisted at the now-dead NodePort 30196; retired.)
 
     case "$service:$port_name:$target_port:$node_port" in
         *bgd*|*director*|*filebrowser*|*file-browser*|*db*|*pghero*|*mon*)
@@ -120,9 +120,6 @@ classify_expected_public_service() {
     local node_port="$3"
 
     if [[ "$service" == *mq-game-svc ]] && [ "$target_port" = "5672" ] && [ "$node_port" = "31982" ]; then
-        return 0
-    fi
-    if [[ "$service" == *mq-game-svc ]] && [ "$target_port" = "15672" ] && [ "$node_port" = "30196" ]; then
         return 0
     fi
 
@@ -216,7 +213,7 @@ for spec in \
 done
 
 section "router reminder"
-info "This host can verify firewalld, not TP-Link A7 router forwards. Router should expose only Dune UDP 7782-7790 and RMQ game TCP 31982/30196 unless intentionally changed."
+info "This host can verify firewalld, not TP-Link A7 router forwards. Router should expose only Dune UDP 7782-7790 and RMQ game AMQP TCP 31982 unless intentionally changed. The RMQ management HTTP port (15672) must NOT be public."
 
 section "summary"
 if [ "$critical" -gt 0 ]; then

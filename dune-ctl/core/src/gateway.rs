@@ -2,11 +2,20 @@ use anyhow::Result;
 
 use crate::{config::Config, kubectl};
 
-const RMQ_HTTP_ARG: &str = "--RMQGameHttpPort=30196";
+const RMQ_HOST_PREFIX: &str = "--RMQGameHostname=";
 
+/// Live state of the gateway Deployment.
+///
+/// Historically dune-ctl tracked whether a manual `--RMQGameHttpPort=30196`
+/// "patch" was present. That patch is retired: the value was stale (the live
+/// RMQ management NodePort is dynamic, not 30196) and `GameRmqHttpAddress` is
+/// off the gameplay path. The address that matters — `--RMQGameHostname` — is
+/// derived by the operator from the k3s node external IP, so the useful signal
+/// now is the advertised hostname and rollout readiness.
 #[derive(Debug, Clone)]
 pub struct GatewayStatus {
-    pub patched: bool,
+    /// The `--RMQGameHostname=<ip>` the gateway advertises to FLS, if present.
+    pub hostname: Option<String>,
     pub ready_replicas: Option<u32>,
     pub updated_replicas: Option<u32>,
 }
@@ -19,59 +28,23 @@ pub async fn status(cfg: &Config) -> Result<GatewayStatus> {
     let name = gateway_deploy_name(cfg);
     let dep = kubectl::get_json(&["get", "deployment", &name, "-n", &cfg.namespace]).await?;
     Ok(GatewayStatus {
-        patched: deployment_has_patch(&dep),
+        hostname: deployment_hostname(&dep),
         ready_replicas: dep.pointer("/status/readyReplicas").and_then(as_u32),
         updated_replicas: dep.pointer("/status/updatedReplicas").and_then(as_u32),
     })
 }
 
-/// Returns true if the gateway Deployment already has the RMQ HTTP port arg.
-pub async fn is_patched(cfg: &Config) -> Result<bool> {
-    let name = gateway_deploy_name(cfg);
-    let dep = kubectl::get_json(&["get", "deployment", &name, "-n", &cfg.namespace]).await?;
-    Ok(deployment_has_patch(&dep))
-}
-
-fn deployment_has_patch(dep: &serde_json::Value) -> bool {
-    let containers = dep
-        .pointer("/spec/template/spec/containers")
+/// Read the `--RMQGameHostname=<ip>` argument from the gateway Deployment.
+fn deployment_hostname(dep: &serde_json::Value) -> Option<String> {
+    dep.pointer("/spec/template/spec/containers/0/args")
         .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    for c in &containers {
-        if let Some(args) = c.get("args").and_then(|v| v.as_array()) {
-            if args.iter().any(|a| a.as_str() == Some(RMQ_HTTP_ARG)) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Append --RMQGameHttpPort=30196 to the gateway Deployment if missing.
-/// Returns true if the patch was applied, false if it was already present.
-pub async fn patch(cfg: &Config) -> Result<bool> {
-    if is_patched(cfg).await? {
-        return Ok(false);
-    }
-    let p = serde_json::json!([{
-        "op": "add",
-        "path": "/spec/template/spec/containers/0/args/-",
-        "value": RMQ_HTTP_ARG,
-    }]);
-    let name = gateway_deploy_name(cfg);
-    kubectl::run(&[
-        "patch",
-        "deployment",
-        &name,
-        "-n",
-        &cfg.namespace,
-        "--type=json",
-        &format!("-p={}", p),
-    ])
-    .await?;
-    Ok(true)
+        .into_iter()
+        .flatten()
+        .find_map(|a| {
+            a.as_str()
+                .and_then(|v| v.strip_prefix(RMQ_HOST_PREFIX))
+                .map(str::to_string)
+        })
 }
 
 fn as_u32(v: &serde_json::Value) -> Option<u32> {

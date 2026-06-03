@@ -6,7 +6,6 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use dune_ctl_core::{
     backup,
     config::{Config, WorldProfile},
-    gateway,
     health::HealthSnapshot,
     logs, maintenance, maps, settings, sietches, update,
 };
@@ -584,7 +583,7 @@ async fn finish_update_task(app: &mut App) {
     match task.await {
         Ok(Ok(())) => {
             app.push_log("update complete");
-            app.push_log("follow-up: verify gateway patch and server browser");
+            app.push_log("follow-up: verify gateway IP and server browser");
             app.worlds = Config::discover_worlds().unwrap_or_default();
             start_refresh(app);
         }
@@ -902,20 +901,6 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                     }
                     Err(e) => app.push_log(format!("stop error: {:#}", e)),
                 }
-            }
-        }
-        KeyCode::Char('g') => {
-            app.push_log("applying gateway patch...");
-            match gateway::patch(&app.cfg).await {
-                Ok(true) => {
-                    app.push_log("gateway: --RMQGameHttpPort=30196 applied");
-                    app.push_target_log();
-                }
-                Ok(false) => {
-                    app.push_log("gateway: already patched");
-                    app.push_target_log();
-                }
-                Err(e) => app.push_log(format!("gateway patch error: {:#}", e)),
             }
         }
         KeyCode::Char('r') => {

@@ -5,7 +5,6 @@ use dune_ctl_core::{
     config::{Config, WorldProfile},
     diagnostics::CheckState,
     fls::FlsTokenState,
-    gateway,
     health::HealthSnapshot,
     logs, maintenance, maps, players, public_ip, settings, sietches, update,
 };
@@ -52,7 +51,7 @@ pub enum Command {
     },
     /// Run local deployment diagnostics
     Diagnostics,
-    /// Run full update pipeline (steamcmd + funcom-patches + gateway-patch)
+    /// Run full update pipeline (steamcmd + funcom-patches + capsule apply)
     Update,
     /// Cleanly stop the selected Dune world for planned host maintenance
     Shutdown {
@@ -66,8 +65,6 @@ pub enum Command {
         #[arg(long, default_value = "300")]
         timeout: u64,
     },
-    /// Re-apply --RMQGameHttpPort=30196 to the gateway Deployment
-    GatewayPatch,
     /// Check FLS token expiry; exits non-zero if critical or expired
     TokenCheck,
     /// Inspect or update the selected world's advertised public Internet IP
@@ -497,7 +494,6 @@ pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
             skip_backup,
             timeout,
         } => cmd_shutdown(cfg, yes, skip_backup, timeout).await,
-        Command::GatewayPatch => cmd_gateway_patch(cfg).await,
         Command::TokenCheck => cmd_token_check(cfg).await,
         Command::PublicIp { action } => cmd_public_ip(action, cfg).await,
         Command::Backup { action } => cmd_backup(action, cfg).await,
@@ -528,14 +524,6 @@ async fn cmd_public_ip(action: PublicIpCommand, cfg: &Config) -> Result<()> {
             println!(
                 "Gateway RMQ : {}",
                 summary.gateway_hostname.as_deref().unwrap_or("unavailable")
-            );
-            println!(
-                "RMQ HTTP    : {}",
-                match summary.gateway_http_patched {
-                    Some(true) => "patched",
-                    Some(false) => "missing",
-                    None => "unavailable",
-                }
             );
         }
         PublicIpCommand::Check { providers } => {
@@ -1287,13 +1275,13 @@ async fn cmd_diagnostics(cfg: &Config) -> Result<()> {
     print_check("k3s API", &diagnostics.k3s_api);
     print_check("firewall backend", &diagnostics.firewall_backend);
     if diagnostics.k3s_api.state == CheckState::Ok {
-        match gateway::status(cfg).await {
+        match dune_ctl_core::gateway::status(cfg).await {
             Ok(gw) => println!(
                 "{:<22} {}",
-                "gateway patch",
-                if gw.patched { "ok" } else { "missing" }
+                "gateway RMQ host",
+                gw.hostname.as_deref().unwrap_or("not set")
             ),
-            Err(e) => println!("{:<22} unavailable {}", "gateway patch", e),
+            Err(e) => println!("{:<22} unavailable {}", "gateway RMQ host", e),
         }
     }
     Ok(())
@@ -1409,12 +1397,32 @@ async fn cmd_preflight(cfg: &Config, strict: bool) -> Result<()> {
 
     let snap = HealthSnapshot::collect(cfg).await?;
 
-    rows.push(match &snap.gateway {
-        Some(gateway) if gateway.patched => {
-            PreflightRow::ok("gateway patch", "--RMQGameHttpPort=30196 present")
+    // The gateway advertises --RMQGameHostname to FLS; the operator derives it
+    // from the k3s node external IP. If it drifts from the configured public IP
+    // (e.g. node-external-ip was not updated after a rotation), clients get a
+    // dead RMQ address. This replaces the retired "--RMQGameHttpPort patch" row.
+    rows.push(match public_ip::show(cfg).await {
+        Ok(summary) => {
+            let configured: Vec<&String> =
+                summary.live_ips.iter().chain(summary.local_ips.iter()).collect();
+            match &summary.gateway_hostname {
+                Some(host) if configured.iter().any(|ip| ip.as_str() == host) => {
+                    PreflightRow::ok("gateway IP", format!("advertises {host} (matches configured)"))
+                }
+                Some(host) => PreflightRow::fail(
+                    "gateway IP",
+                    format!(
+                        "advertises {host}; configured {} — fix k3s node-external-ip (see PUBLIC-IP.md)",
+                        configured
+                            .first()
+                            .map(|s| s.as_str())
+                            .unwrap_or("unknown")
+                    ),
+                ),
+                None => PreflightRow::warn("gateway IP", "gateway --RMQGameHostname not found"),
+            }
         }
-        Some(_) => PreflightRow::fail("gateway patch", "--RMQGameHttpPort=30196 missing"),
-        None => PreflightRow::warn("gateway patch", "gateway deployment status unavailable"),
+        Err(_) => PreflightRow::warn("gateway IP", "gateway/public-ip status unavailable"),
     });
 
     rows.push(match &snap.fls {
@@ -1647,12 +1655,8 @@ async fn cmd_status(cfg: &Config) -> Result<()> {
     println!("Start       : {}", start_summary(&snap));
     if let Some(gateway) = &snap.gateway {
         println!(
-            "Gateway     : {} ready {}/{}",
-            if gateway.patched {
-                "patched"
-            } else {
-                "missing RMQ HTTP patch"
-            },
+            "Gateway     : RMQ host {} ready {}/{}",
+            gateway.hostname.as_deref().unwrap_or("—"),
             opt_u32(gateway.ready_replicas),
             opt_u32(gateway.updated_replicas)
         );
@@ -1876,15 +1880,6 @@ async fn cmd_shutdown(cfg: &Config, yes: bool, skip_backup: bool, timeout: u64) 
         println!("{}", line);
     }
     task.await??;
-    Ok(())
-}
-
-async fn cmd_gateway_patch(cfg: &Config) -> Result<()> {
-    match gateway::patch(cfg).await? {
-        true => println!("gateway: --RMQGameHttpPort=30196 applied."),
-        false => println!("gateway: already patched, nothing to do."),
-    }
-    print_target_summary(cfg);
     Ok(())
 }
 

@@ -1,105 +1,44 @@
 #!/bin/bash
-# Apply public RMQ gateway arguments to the gateway deployment (idempotent).
+# DEPRECATED / HISTORICAL — do not use in normal operation.
 #
-# The server-operator regenerates the gateway Deployment from the BattleGroup CR
-# on every restart or update, stripping any manual patches.  Run this after
-# every battlegroup restart or update to restore the fix.
+# This script used to (a) add --RMQGameHttpPort=30196 to the gateway Deployment
+# and (b) force --RMQGameHostname to the BattleGroup spec's public IP, and had to
+# be re-run after every restart/update. Both halves are now retired:
 #
-# Background: the gateway Python code looks up mq-game-svc NodePorts via the
-# Kubernetes API, finds the amqp port (31982) but not the http port because the
-# port name doesn't match what it expects.  Without this arg it sends
-# GameRmqHttpAddress: "47.145.31.211:None" to FLS.
+#  - --RMQGameHostname is derived by the server-operator from the k3s NODE
+#    EXTERNAL IP (`node-external-ip:` in /etc/rancher/k3s/config.yaml). The
+#    operator stamps it on every reconcile, so a manual patch was only ever a
+#    band-aid that the operator reverted — which is why this had to be re-run.
+#    The real fix when the public IP changes is to update node-external-ip and
+#    restart k3s (see PUBLIC-IP.md), not to run this script.
+#
+#  - --RMQGameHttpPort=30196 was unnecessary (GameRmqHttpAddress / the RMQ
+#    management API is off the gameplay path) AND stale: the live RMQ management
+#    NodePort is dynamic (31506 at time of writing), not 30196. Advertising 30196
+#    pointed FLS at a dead port.
+#
+# Root cause documented and fixed 2026-06-02. Verify the gateway's advertised IP
+# with:  dune-ctl --world <world> preflight   (the "gateway IP" row), or
+#        dune-ctl --world <world> diagnostics  (gateway RMQ host).
+#
+# This file is kept only for historical reference. It intentionally does nothing.
 
 set -euo pipefail
 
-RMQ_GAME_HTTP_PORT="${RMQ_GAME_HTTP_PORT:-30196}"
+cat >&2 <<'EOF'
+gateway-patch.sh is DEPRECATED and no longer patches anything.
 
-NS=$(sudo kubectl get ns --no-headers -o custom-columns=NAME:.metadata.name \
-     | grep "^funcom-seabass-" | head -1)
-BG="${NS#funcom-seabass-}"
-GW_DEPLOY="${BG}-sgw-deploy"
+Why: the gateway --RMQGameHostname is operator-managed from the k3s node
+external IP, and the old --RMQGameHttpPort=30196 arg was stale/unnecessary.
 
-find_gateway_deploy() {
-    sudo kubectl get deployments -n "$NS" --no-headers -o custom-columns=NAME:.metadata.name 2>/dev/null \
-        | grep -- '-sgw-deploy$' \
-        | head -n1
-}
+To change the advertised public IP (the thing this used to band-aid):
+  1. edit /etc/rancher/k3s/config.yaml -> node-external-ip: <new-ip>
+  2. sudo rc-service k3s restart
+  3. sudo kubectl rollout restart deployment -n funcom-operators
+  4. dune-ctl --world <world> public-ip set <new-ip> --yes   # files + spec env
+See PUBLIC-IP.md for the full runbook.
 
-wait_for_gateway_deploy() {
-    local timeout="${1:-180}"
-    local elapsed=0
-    local interval=5
-    local found
-
-    while [ "$elapsed" -lt "$timeout" ]; do
-        found="$(find_gateway_deploy || true)"
-        if [ -n "$found" ]; then
-            GW_DEPLOY="$found"
-            return 0
-        fi
-        sleep "$interval"
-        elapsed=$((elapsed + interval))
-        echo "  Still waiting for gateway deployment... (${elapsed}s / ${timeout}s)"
-    done
-
-    echo "ERROR: gateway deployment not found in $NS after ${timeout}s." >&2
-    echo "If the battlegroup is stopped, start it first and rerun this script." >&2
-    return 1
-}
-
-echo "Gateway: $GW_DEPLOY"
-echo "Namespace: $NS"
-echo ""
-
-PUBLIC_IP="${PUBLIC_IP:-$(sudo kubectl get battlegroup "$BG" -n "$NS" -o json \
-    | jq -r '.spec.utilities.serverGateway.spec.envVars[]? | select(.name == "HOST_DATACENTER_IP_ADDRESS") | .value' \
-    | head -n1)}"
-if [ -z "$PUBLIC_IP" ] || [ "$PUBLIC_IP" = "null" ]; then
-    echo "ERROR: could not derive HOST_DATACENTER_IP_ADDRESS from BattleGroup $BG." >&2
-    echo "Set PUBLIC_IP=<address> explicitly or fix the BattleGroup spec." >&2
-    exit 1
-fi
-echo "Public IP: $PUBLIC_IP"
-echo ""
-
-if ! sudo kubectl get deployment "$GW_DEPLOY" -n "$NS" >/dev/null 2>&1; then
-    echo "Gateway deployment is not present yet; waiting for operator to create it..."
-    wait_for_gateway_deploy 180
-    echo "Gateway: $GW_DEPLOY"
-    echo ""
-fi
-
-GW_JSON="$(sudo kubectl get deployment "$GW_DEPLOY" -n "$NS" -o json)"
-
-host_idx="$(printf '%s' "$GW_JSON" | jq -r '.spec.template.spec.containers[0].args | to_entries[] | select(.value | startswith("--RMQGameHostname=")) | .key' | head -n1)"
-host_arg="$(printf '%s' "$GW_JSON" | jq -r '.spec.template.spec.containers[0].args[]? | select(startswith("--RMQGameHostname="))' | head -n1)"
-has_http_port="$(printf '%s' "$GW_JSON" | jq -r --arg port "$RMQ_GAME_HTTP_PORT" '.spec.template.spec.containers[0].args | any(. == ("--RMQGameHttpPort=" + $port))')"
-
-patch='[]'
-if [ -n "$host_idx" ] && [ "$host_arg" != "--RMQGameHostname=$PUBLIC_IP" ]; then
-    echo "Patching gateway to set --RMQGameHostname=$PUBLIC_IP ..."
-    patch="$(printf '%s' "$patch" | jq \
-        --arg path "/spec/template/spec/containers/0/args/$host_idx" \
-        --arg value "--RMQGameHostname=$PUBLIC_IP" \
-        '. + [{op:"replace", path:$path, value:$value}]')"
-fi
-
-if [ "$has_http_port" != "true" ]; then
-    echo "Patching gateway to add --RMQGameHttpPort=$RMQ_GAME_HTTP_PORT ..."
-    patch="$(printf '%s' "$patch" | jq \
-        --arg value "--RMQGameHttpPort=$RMQ_GAME_HTTP_PORT" \
-        '. + [{op:"add", path:"/spec/template/spec/containers/0/args/-", value:$value}]')"
-fi
-
-if [ "$patch" = "[]" ]; then
-    echo "--RMQGameHostname=$PUBLIC_IP and --RMQGameHttpPort=$RMQ_GAME_HTTP_PORT already present — nothing to do."
-    exit 0
-fi
-
-sudo kubectl patch deployment "$GW_DEPLOY" -n "$NS" --type='json' -p="$patch"
-
-echo "Waiting for rollout ..."
-sudo kubectl rollout status deployment/"$GW_DEPLOY" -n "$NS" --timeout=120s
-
-echo ""
-echo "Done. Gateway will send GameRmqAddress: \"$PUBLIC_IP:31982\" and GameRmqHttpAddress: \"$PUBLIC_IP:$RMQ_GAME_HTTP_PORT\" to FLS on next start."
+To verify the gateway advertises the right IP:
+  dune-ctl --world <world> preflight     # "gateway IP" row
+EOF
+exit 0

@@ -553,13 +553,16 @@ fn draw_overview(f: &mut Frame, snap: Option<&HealthSnapshot>, area: Rect) {
 fn draw_gateway_panel(f: &mut Frame, snap: Option<&HealthSnapshot>, area: Rect) {
     let lines = if let Some(gw) = snap.and_then(|s| s.gateway.as_ref()) {
         vec![
-            Line::from(vec![Span::raw("RMQ HTTP patch: "), bool_span(gw.patched)]),
+            Line::from(format!(
+                "RMQ hostname: {}",
+                gw.hostname.as_deref().unwrap_or("—")
+            )),
             Line::from(format!(
                 "Ready replicas: {}   Updated: {}",
                 opt_u32(gw.ready_replicas),
                 opt_u32(gw.updated_replicas)
             )),
-            Line::from("Expected GameRmqHttpAddress: 47.145.31.211:30196"),
+            Line::from("Hostname is operator-managed (k3s node-external-ip)."),
         ]
     } else {
         vec![Line::from("Gateway deployment status unavailable.")]
@@ -886,7 +889,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
     let hint = match app.view {
         View::Worlds => "[↑/↓] select world  [I] init profile  [r] refresh  [q] quit",
         View::Dashboard => {
-            "[A] start world  [Z] stop world  [R] restart  [Q] clean shutdown  [u] update  [g] gateway  [r] refresh"
+            "[A] start world  [Z] stop world  [R] restart  [Q] clean shutdown  [u] update  [r] refresh"
         }
         View::Maps => "[Tab/4] settings  [s/x] map start/stop  [r] refresh  [q] quit",
         View::Settings => {
@@ -1478,14 +1481,6 @@ fn phase_color(phase: &str) -> Color {
 
 fn status_span(value: &str) -> Span<'static> {
     Span::styled(value.to_string(), Style::default().fg(phase_color(value)))
-}
-
-fn bool_span(value: bool) -> Span<'static> {
-    if value {
-        Span::styled("yes", Style::default().fg(Color::Green))
-    } else {
-        Span::styled("no", Style::default().fg(Color::Red))
-    }
 }
 
 fn check_line(label: &str, check: &Check) -> Line<'static> {
