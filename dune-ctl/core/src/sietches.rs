@@ -240,12 +240,24 @@ pub async fn add(
 
 /// Set (or change) the display name of an existing Sietch (by world-partition id).
 pub async fn rename(cfg: &Config, partition_id: u32, new_name: &str) -> Result<()> {
-    upsert_podspec_arg(cfg, partition_id, display_name_arg(new_name)?, is_display_name_arg).await
+    upsert_podspec_arg(
+        cfg,
+        partition_id,
+        display_name_arg(new_name)?,
+        is_display_name_arg,
+    )
+    .await
 }
 
 /// Set (or change) the join password of an existing Sietch (by world-partition id).
 pub async fn set_password(cfg: &Config, partition_id: u32, password: &str) -> Result<()> {
-    upsert_podspec_arg(cfg, partition_id, login_password_arg(password)?, is_password_arg).await
+    upsert_podspec_arg(
+        cfg,
+        partition_id,
+        login_password_arg(password)?,
+        is_password_arg,
+    )
+    .await
 }
 
 /// Add or update one `-execcmds` per-Sietch argument (display name or password)
@@ -572,11 +584,7 @@ fn enabled_partition_count(bg: &Value, map: &str) -> usize {
         .map(|parts| {
             parts
                 .iter()
-                .filter(|p| {
-                    !p.get("disable")
-                        .and_then(|d| d.as_bool())
-                        .unwrap_or(false)
-                })
+                .filter(|p| !p.get("disable").and_then(|d| d.as_bool()).unwrap_or(false))
                 .count()
         })
         .unwrap_or(0)
@@ -788,7 +796,10 @@ mod tests {
         assert_eq!(patch[1]["value"], 31);
         // 3) replicas -> 2
         assert_eq!(patch[2]["op"], "replace");
-        assert_eq!(patch[2]["path"], "/spec/serverGroup/template/spec/sets/0/replicas");
+        assert_eq!(
+            patch[2]["path"],
+            "/spec/serverGroup/template/spec/sets/0/replicas"
+        );
         assert_eq!(patch[2]["value"], 2);
     }
 
@@ -800,7 +811,10 @@ mod tests {
         assert_eq!(patch.len(), 4);
         // set has no podSpecs yet → create the array at /podSpecs
         assert_eq!(patch[3]["op"], "add");
-        assert_eq!(patch[3]["path"], "/spec/serverGroup/template/spec/sets/0/podSpecs");
+        assert_eq!(
+            patch[3]["path"],
+            "/spec/serverGroup/template/spec/sets/0/podSpecs"
+        );
         let entry = &patch[3]["value"][0];
         assert_eq!(entry["index"], 31); // index = new partition id
         assert_eq!(
@@ -815,7 +829,10 @@ mod tests {
         let plan = plan_add_sietch(&v, "Survival_1").unwrap();
         let patch = build_add_patch(&plan, Some("Sietch Testbed"), Some("hunter2")).unwrap();
         let args = &patch[3]["value"][0]["arguments"];
-        assert_eq!(args[0], "-execcmds=\"Bgd.ServerDisplayName 'Sietch Testbed'\"");
+        assert_eq!(
+            args[0],
+            "-execcmds=\"Bgd.ServerDisplayName 'Sietch Testbed'\""
+        );
         assert_eq!(args[1], "-execcmds=\"Bgd.ServerLoginPassword 'hunter2'\"");
     }
 
@@ -882,13 +899,19 @@ mod tests {
         );
         // set partitions: id 31 at index 1 removed
         assert_eq!(patch[1]["op"], "remove");
-        assert_eq!(patch[1]["path"], "/spec/serverGroup/template/spec/sets/0/partitions/1");
+        assert_eq!(
+            patch[1]["path"],
+            "/spec/serverGroup/template/spec/sets/0/partitions/1"
+        );
         // replicas -> 1
         assert_eq!(patch[2]["op"], "replace");
         assert_eq!(patch[2]["value"], 1);
         // podSpecs entry removed
         assert_eq!(patch[3]["op"], "remove");
-        assert_eq!(patch[3]["path"], "/spec/serverGroup/template/spec/sets/0/podSpecs/0");
+        assert_eq!(
+            patch[3]["path"],
+            "/spec/serverGroup/template/spec/sets/0/podSpecs/0"
+        );
     }
 
     #[test]
@@ -898,7 +921,9 @@ mod tests {
         let mut v = bg_full(30, 1);
         // simulate the first add already applied
         let parts = v
-            .pointer_mut("/spec/database/template/spec/deployment/spec/worldPartitions/0/partitions")
+            .pointer_mut(
+                "/spec/database/template/spec/deployment/spec/worldPartitions/0/partitions",
+            )
             .unwrap()
             .as_array_mut()
             .unwrap();

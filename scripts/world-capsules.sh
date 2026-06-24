@@ -81,6 +81,14 @@ need_cmd() {
     command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
 
+sudo_capsule() {
+    if [ "${DUNE_CAPSULE_SUDO_INTERACTIVE:-0}" = "1" ]; then
+        sudo "$@"
+    else
+        sudo -n "$@"
+    fi
+}
+
 validate_env() {
     case "$1" in
         ptc|live) ;;
@@ -436,11 +444,14 @@ verify_package_images_loaded() {
     local package_root="$1"
     local missing=0
     local image
+    local loaded_images
 
     echo "Verifying package images in k3s/containerd:"
+    loaded_images="$(sudo_capsule ctr -n k8s.io images ls -q)" \
+        || die "unable to list k3s/containerd images with sudo ctr"
     while IFS= read -r image; do
         [ -n "$image" ] || continue
-        if sudo ctr -n k8s.io images ls -q | grep -Fxq "$image"; then
+        if grep -Fxq "$image" <<< "$loaded_images"; then
             echo "  ok $image"
         else
             echo "  missing $image"
@@ -492,7 +503,7 @@ images_command() {
             while IFS= read -r rel; do
                 [ -n "$rel" ] || continue
                 echo "  import $rel"
-                sudo ctr -n k8s.io images import "$package_root/$rel"
+                sudo_capsule ctr -n k8s.io images import "$package_root/$rel"
             done < <(image_tars "$package_root")
             echo "Image import complete."
             verify_package_images_loaded "$package_root"
@@ -510,7 +521,7 @@ images_command() {
 }
 
 active_battlegroups() {
-    sudo kubectl get battlegroups -A --no-headers 2>/dev/null | awk '{print $2}'
+    sudo_capsule kubectl get battlegroups -A --no-headers 2>/dev/null | awk '{print $2}'
 }
 
 set_capsule_value() {
@@ -707,10 +718,10 @@ activate_capsule() {
     cp "$dir/rmq-secret.yaml" "$DUNE_HOME/$world_id-rmq-secret.yaml"
     chmod 600 "$DUNE_HOME/$world_id-fls-secret.yaml" "$DUNE_HOME/$world_id-rmq-secret.yaml"
 
-    sudo kubectl get ns "$ns" >/dev/null 2>&1 || sudo kubectl create ns "$ns"
-    sudo kubectl apply -n "$ns" -f "$dir/fls-secret.yaml"
-    sudo kubectl apply -n "$ns" -f "$dir/rmq-secret.yaml"
-    sudo kubectl apply -n "$ns" -f "$dir/battlegroup.yaml"
+    sudo_capsule kubectl get ns "$ns" >/dev/null 2>&1 || sudo_capsule kubectl create ns "$ns"
+    sudo_capsule kubectl apply -n "$ns" -f "$dir/fls-secret.yaml"
+    sudo_capsule kubectl apply -n "$ns" -f "$dir/rmq-secret.yaml"
+    sudo_capsule kubectl apply -n "$ns" -f "$dir/battlegroup.yaml"
     echo "Capsule applied. Watch with: sudo kubectl get battlegroups -A"
 }
 
@@ -721,6 +732,12 @@ copy_user_settings() {
     mkdir -p "$dest_dir"
     cp "$source_root/scripts/setup/config/UserEngine.ini" "$dest_dir/UserEngine.ini"
     cp "$source_root/scripts/setup/config/UserGame.ini" "$dest_dir/UserGame.ini"
+    perl -0pi -e '
+        s/^Port=\d+$/Port=7782/m;
+        s/^IGWPort=\d+$/IGWPort=7893/m;
+        s/7777, 7778 etc\./7782, 7783 etc./g;
+        s/7888, 7889 etc\./7893, 7894 etc./g;
+    ' "$dest_dir/UserEngine.ini"
 
     local escaped
     escaped="$(json_escape "$sietch_name")"
@@ -992,26 +1009,26 @@ print_capsules() {
 
 print_kubernetes_state() {
     section "Kubernetes Battlegroups"
-    if ! sudo kubectl get battlegroups -A -o wide 2>/dev/null; then
+    if ! sudo_capsule kubectl get battlegroups -A -o wide 2>/dev/null; then
         echo "kubectl battlegroup inventory unavailable."
     fi
 
     section "Kubernetes Services / NodePorts"
-    if ! sudo kubectl get svc -A -o wide 2>/dev/null | awk '
+    if ! sudo_capsule kubectl get svc -A -o wide 2>/dev/null | awk '
         NR == 1 || $1 ~ /^funcom-seabass-/ || $1 == "kube-system" && $2 == "traefik" {print}
     '; then
         echo "kubectl service inventory unavailable."
     fi
 
     section "Kubernetes PVCs"
-    if ! sudo kubectl get pvc -A 2>/dev/null | awk 'NR == 1 || $1 ~ /^funcom-seabass-/ {print}'; then
+    if ! sudo_capsule kubectl get pvc -A 2>/dev/null | awk 'NR == 1 || $1 ~ /^funcom-seabass-/ {print}'; then
         echo "kubectl pvc inventory unavailable."
     fi
 }
 
 print_loaded_images() {
     section "Loaded Dune Images"
-    if ! sudo ctr -n k8s.io images ls -q 2>/dev/null \
+    if ! sudo_capsule ctr -n k8s.io images ls -q 2>/dev/null \
         | grep -E 'seabass|igw-k8s|igw-postgres' \
         | sort; then
         echo "No Dune images found or containerd inventory unavailable."

@@ -572,27 +572,54 @@ mod tests {
     fn latched_stopping_after_scale_down_reads_as_running() {
         // ServerSet settled at ready==target>=1 but phase stuck "Stopping"
         // (the post-scale-down operator latch) → display as Running.
-        assert_eq!(normalize_serverset_phase("Stopping", Some(1), Some(1)), "Running");
-        assert_eq!(normalize_serverset_phase("Stopping", Some(2), Some(2)), "Running");
+        assert_eq!(
+            normalize_serverset_phase("Stopping", Some(1), Some(1)),
+            "Running"
+        );
+        assert_eq!(
+            normalize_serverset_phase("Stopping", Some(2), Some(2)),
+            "Running"
+        );
     }
 
     #[test]
     fn genuine_stop_states_are_not_masked() {
         // Fully stopped: ready==target==0 → keep Stopping.
-        assert_eq!(normalize_serverset_phase("Stopping", Some(0), Some(0)), "Stopping");
+        assert_eq!(
+            normalize_serverset_phase("Stopping", Some(0), Some(0)),
+            "Stopping"
+        );
         // Draining toward stop: target dropped to 0, ready not yet → keep Stopping.
-        assert_eq!(normalize_serverset_phase("Stopping", Some(1), Some(0)), "Stopping");
+        assert_eq!(
+            normalize_serverset_phase("Stopping", Some(1), Some(0)),
+            "Stopping"
+        );
         // Starting/not-yet-ready: ready < target → keep Stopping.
-        assert_eq!(normalize_serverset_phase("Stopping", Some(0), Some(1)), "Stopping");
+        assert_eq!(
+            normalize_serverset_phase("Stopping", Some(0), Some(1)),
+            "Stopping"
+        );
         // Missing counts → don't guess.
-        assert_eq!(normalize_serverset_phase("Stopping", None, None), "Stopping");
+        assert_eq!(
+            normalize_serverset_phase("Stopping", None, None),
+            "Stopping"
+        );
     }
 
     #[test]
     fn non_stopping_phases_pass_through() {
-        assert_eq!(normalize_serverset_phase("Running", Some(1), Some(1)), "Running");
-        assert_eq!(normalize_serverset_phase("Initializing", Some(0), Some(1)), "Initializing");
-        assert_eq!(normalize_serverset_phase("Stopped", Some(0), Some(0)), "Stopped");
+        assert_eq!(
+            normalize_serverset_phase("Running", Some(1), Some(1)),
+            "Running"
+        );
+        assert_eq!(
+            normalize_serverset_phase("Initializing", Some(0), Some(1)),
+            "Initializing"
+        );
+        assert_eq!(
+            normalize_serverset_phase("Stopped", Some(0), Some(0)),
+            "Stopped"
+        );
     }
 
     #[test]

@@ -21,9 +21,10 @@ file describes the stable system shape and the control loops that make it work.
 
 Current host sizing:
 
-- RAM: 16 GiB physical
+- RAM: 64 GiB physical (~58.9 GiB usable)
 - Swap: 62 GiB total, largely SSD-backed
-- Practical operating mode: Dune + Conan can coexist, but memory pressure is normal and swap use is expected
+- Practical operating mode: Dune + Conan coexist with always-on Hagga Basin,
+  Overmap, DeepDesert_1, SH_Arrakeen, and SH_HarkoVillage.
 
 Observed live state on 2026-05-15:
 
@@ -61,7 +62,9 @@ LAN client
 ```
 
 Dune game UDP ports are kept in `7782-7790`, above Conan's `7777-7778` range.
-The active game port is assigned at pod startup and can change after restarts.
+The active `UserEngine.ini` sets `Port=7782` so game servers start directly in
+the forwarded Dune range; the exact active port can still change after restarts
+as maps bind sequentially.
 
 ## Firewall Model
 
@@ -264,16 +267,19 @@ on:  BattleGroup replicas=1, ServerSetScale replicas=1, matching partitions, Ser
 
 ## Current Map Strategy
 
-Normal low-footprint runtime:
+Normal Ixware runtime:
 
 - `Survival_1`: on
 - `Overmap`: on
-- `DeepDesert_1`: off
-- social/story/CB/DLC maps: off unless needed
+- `DeepDesert_1`: on and director-persistent (`MinServers=1`)
+- `SH_Arrakeen`: on and director-persistent (`MinServers=1`)
+- `SH_HarkoVillage`: on and director-persistent (`MinServers=1`)
+- story/CB/DLC maps: off unless needed
 
-Deep Desert and social-zone travel should be tested by cleanly starting the
-target map, verifying `ServerSet` and `ServerSetScale` replicas and partitions,
-then watching current ports and memory.
+Deep Desert stays warm for Tier 5/6 spice/flour resource UX. Social hubs stay
+warm for trainer dialogue/travel gates. Additional travel maps should be tested
+by cleanly starting the target map, verifying `ServerSet` and `ServerSetScale`
+replicas and partitions, then watching current ports and memory.
 
 ## FLS and Travel Flow
 
@@ -337,8 +343,9 @@ because database import is destructive.
 
 ## Memory and Scheduling
 
-The host currently has 16 GB RAM plus large swap headroom. Conan uses roughly
-9.5 GB RSS, so Dune runs in a constrained but workable envelope.
+The host currently has about 58.9 GB usable RAM plus large swap headroom. Conan
+uses roughly 9.5 GB RSS, and Dune now runs the main world, Overmap,
+DeepDesert_1, SH_Arrakeen, and SH_HarkoVillage as the normal baseline.
 
 The local `experimental_swap.sh` patch lowers Kubernetes memory requests so the
 operators can schedule maps on this single node. Limits remain closer to
@@ -376,13 +383,15 @@ The live deployment diverges from Funcom's expected VM in these ways:
 - firewalld is configured manually with iptables backend.
 - SteamCMD update flow includes a local pre-fetch/validate step.
 - Funcom script patches are maintained in `scripts/funcom-patches/`.
-- Gateway deployment needs a local RMQ HTTP port patch after regeneration.
+- Gateway deployment no longer needs a local RMQ HTTP port patch; the old
+  `--RMQGameHttpPort=30196` patch was retired and the advertised gateway IP is
+  operator-derived from k3s `node-external-ip`.
 - TP-Link A7 provides NAT hairpin for LAN clients; the old local OUTPUT DNAT
   workaround is historical fallback only.
 - The local update wrapper adds safety around Funcom's update flow: backup,
   stop, double patch re-application, DB credential verification/repair, and
-  gateway patch. This is intentionally more conservative than invoking
-  `server/scripts/battlegroup.sh update` directly.
+  gateway advertised-IP verification. This is intentionally more conservative
+  than invoking `server/scripts/battlegroup.sh update` directly.
 - Before invoking Funcom's update flow, the wrapper removes existing
   `~/.dune/bin/battlegroup` and `~/.dune/bin/bg-util` symlinks. Funcom's
   `setup/system.sh` recreates them with plain `ln -s`, which otherwise exits

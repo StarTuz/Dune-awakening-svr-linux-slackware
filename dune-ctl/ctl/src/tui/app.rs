@@ -6,6 +6,7 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use dune_ctl_core::{
     backup,
     config::{Config, WorldProfile},
+    fls,
     health::HealthSnapshot,
     logs, maintenance, maps, settings, sietches, update,
 };
@@ -46,6 +47,8 @@ pub struct App {
     pub shutdown_task: Option<JoinHandle<Result<()>>>,
     pub shutdown_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     pub shutdown_lines: Vec<String>,
+    pub token_rotate_task: Option<JoinHandle<Result<fls::TokenRotationReport>>>,
+    pub pending_token: Option<String>,
     pub view: View,
     pub selected: usize,
     pub settings_selected: usize,
@@ -79,6 +82,7 @@ pub enum PendingAction {
     RunBackup,
     RunUpdate,
     CleanShutdown,
+    RotateFlsToken,
     DeleteBackup,
     RemoveSchedule,
 }
@@ -88,6 +92,7 @@ pub enum InputAction {
     SetSetting,
     SetBackupCron,
     SetBackupKeep,
+    RotateFlsToken,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +101,7 @@ pub struct InputMode {
     pub label: String,
     pub value: String,
     pub action: InputAction,
+    pub secret: bool,
 }
 
 impl PendingAction {
@@ -112,6 +118,7 @@ impl PendingAction {
             Self::RunBackup => "run full backup",
             Self::RunUpdate => "update world and start after",
             Self::CleanShutdown => "cleanly shut down Dune for host reboot",
+            Self::RotateFlsToken => "rotate FLS token",
             Self::DeleteBackup => "delete backup bundle",
             Self::RemoveSchedule => "remove backup schedule",
         }
@@ -126,7 +133,7 @@ impl PendingAction {
                 "Stops the selected World/BattleGroup through the primary Sietch lifecycle, disconnecting players."
             }
             Self::RestartSietch => {
-                "Restarts the selected World/BattleGroup through the primary Sietch lifecycle. Gateway patch may need verification after rollout."
+                "Deploys any pending local settings, then restarts the selected World/BattleGroup through the primary Sietch lifecycle. Connected players will be disconnected."
             }
             Self::ApplySettings => {
                 "Copies local UserEngine.ini and UserGame.ini into /srv/UserSettings."
@@ -147,10 +154,13 @@ impl PendingAction {
                 "Runs dune-backup.sh: DB dump, k8s metadata, and settings snapshot. Takes 1–3 minutes. Output streams in the lower pane."
             }
             Self::RunUpdate => {
-                "Runs the live capsule-aware update: backup, SteamCMD validate, image import, capsule refresh, apply, start, gateway patch, and readiness checks. Connected players will be disconnected."
+                "Runs the live capsule-aware update: backup, SteamCMD validate, image import/verify, capsule refresh, apply, start, gateway IP verification, and readiness checks. Connected players will be disconnected."
             }
             Self::CleanShutdown => {
                 "Runs the planned-maintenance sequence: full backup, BattleGroup stop, then waits until game servers are stopped. The host is not rebooted."
+            }
+            Self::RotateFlsToken => {
+                "Rotates the selected world's FLS token in place. It updates the capsule, applies the FLS secret and BattleGroup, then waits for readiness."
             }
             Self::DeleteBackup => {
                 "Permanently deletes the selected backup bundle from disk. Cannot be undone."
@@ -195,6 +205,8 @@ impl App {
             shutdown_task: None,
             shutdown_rx: None,
             shutdown_lines: Vec::new(),
+            token_rotate_task: None,
+            pending_token: None,
             view: View::Dashboard,
             selected: 0,
             settings_selected: 0,
@@ -210,7 +222,10 @@ impl App {
     }
 
     pub fn retarget_world(&mut self, index: usize) -> bool {
-        if self.update_task.is_some() || self.shutdown_task.is_some() {
+        if self.update_task.is_some()
+            || self.shutdown_task.is_some()
+            || self.token_rotate_task.is_some()
+        {
             self.push_log("operation running; world retarget disabled");
             return false;
         }
@@ -240,6 +255,8 @@ impl App {
         self.shutdown_task = None;
         self.shutdown_rx = None;
         self.shutdown_lines.clear();
+        self.token_rotate_task = None;
+        self.pending_token = None;
         self.loading = true;
         self.push_log(format!(
             "retargeted to {} / {}",
@@ -311,6 +328,7 @@ pub async fn run_loop<B: Backend>(terminal: &mut Terminal<B>, cfg: &Config) -> R
         finish_backup_task(&mut app).await;
         finish_update_task(&mut app).await;
         finish_shutdown_task(&mut app).await;
+        finish_token_rotate_task(&mut app).await;
         terminal.draw(|f| ui::draw(f, &app))?;
 
         if event::poll(EVENT_TIMEOUT)? {
@@ -522,6 +540,32 @@ pub fn start_clean_shutdown(app: &mut App) {
     app.push_log("shutdown will back up, stop BattleGroup, and wait for game servers");
 }
 
+pub fn start_token_rotation(app: &mut App) -> Result<()> {
+    if app.token_rotate_task.is_some() {
+        app.push_log("token rotation already running");
+        return Ok(());
+    }
+    let Some(token) = app.pending_token.take() else {
+        anyhow::bail!("no pending token captured");
+    };
+    let cfg = app.cfg.clone();
+    app.token_rotate_task = Some(tokio::spawn(async move {
+        fls::rotate_token(
+            &cfg,
+            &token,
+            fls::TokenRotateOptions {
+                dry_run: false,
+                yes: true,
+                skip_live: false,
+                wait: true,
+            },
+        )
+        .await
+    }));
+    app.push_log("FLS token rotation started");
+    Ok(())
+}
+
 async fn finish_backup_task(app: &mut App) {
     // Drain any new output lines each tick regardless of task completion
     if let Some(rx) = app.backup_rx.as_mut() {
@@ -627,6 +671,39 @@ async fn finish_shutdown_task(app: &mut App) {
     }
 }
 
+async fn finish_token_rotate_task(app: &mut App) {
+    if !app
+        .token_rotate_task
+        .as_ref()
+        .map(|t| t.is_finished())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let Some(task) = app.token_rotate_task.take() else {
+        return;
+    };
+    match task.await {
+        Ok(Ok(report)) => {
+            app.push_log(format!(
+                "FLS token rotated: expires {}",
+                report.metadata.expires_at.format("%Y-%m-%d")
+            ));
+            app.push_log(format!(
+                "replaced {} game args, {} utility env vars, {} secret",
+                report.server_arg_replacements,
+                report.utility_env_replacements,
+                report.fls_secret_replacements
+            ));
+            app.push_log("gateway/director/RMQ/primary Sietch ready");
+            start_refresh(app);
+            start_logs_refresh(app);
+        }
+        Ok(Err(e)) => app.push_log(format!("FLS token rotation error: {:#}", e)),
+        Err(e) => app.push_log(format!("FLS token rotation task error: {}", e)),
+    }
+}
+
 async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     if app.input.is_some() {
         handle_input_key(app, code).await;
@@ -645,8 +722,10 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         return;
     }
 
-    if app.update_task.is_some() || app.shutdown_task.is_some() {
-        let op = if app.shutdown_task.is_some() {
+    if app.update_task.is_some() || app.shutdown_task.is_some() || app.token_rotate_task.is_some() {
+        let op = if app.token_rotate_task.is_some() {
+            "FLS token rotation"
+        } else if app.shutdown_task.is_some() {
             "clean shutdown"
         } else {
             "update"
@@ -766,6 +845,11 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 }
             }
         }
+        KeyCode::Char('T') => {
+            if app.view == View::Dashboard {
+                begin_fls_token_rotation(app);
+            }
+        }
         KeyCode::Char('N') => {
             app.view = View::Settings;
             begin_setting_edit_by_key(app, "sietch_name");
@@ -879,14 +963,34 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         }
         KeyCode::Char('s') => {
             if let Some(name) = selected_map(app) {
-                app.push_log(format!("starting {}...", name));
-                match maps::start(&app.cfg, &name, false).await {
-                    Ok(()) => {
-                        app.push_log(format!("{}: start triggered", name));
-                        app.push_target_log();
-                        start_refresh(app);
+                if maps::is_director_managed_social_hub(&name) {
+                    app.push_log(format!("prewarming {} through director...", name));
+                    match maps::prewarm(&app.cfg, &name).await {
+                        Ok(outcome) => {
+                            app.push_log(format!(
+                                "{}: MinServers {} -> {}, scale requested",
+                                name,
+                                outcome
+                                    .previous
+                                    .map(|value| value.to_string())
+                                    .unwrap_or_else(|| "-".to_string()),
+                                outcome.applied
+                            ));
+                            app.push_target_log();
+                            start_refresh(app);
+                        }
+                        Err(e) => app.push_log(format!("prewarm error: {:#}", e)),
                     }
-                    Err(e) => app.push_log(format!("start error: {:#}", e)),
+                } else {
+                    app.push_log(format!("starting {}...", name));
+                    match maps::start(&app.cfg, &name, false).await {
+                        Ok(()) => {
+                            app.push_log(format!("{}: start triggered", name));
+                            app.push_target_log();
+                            start_refresh(app);
+                        }
+                        Err(e) => app.push_log(format!("start error: {:#}", e)),
+                    }
                 }
             }
         }
@@ -919,7 +1023,7 @@ async fn handle_input_key(app: &mut App, code: KeyCode) {
     match code {
         KeyCode::Esc => {
             app.input = None;
-            app.push_log("setting edit cancelled");
+            app.push_log("input cancelled");
         }
         KeyCode::Enter => {
             let Some(input) = app.input.take() else {
@@ -980,6 +1084,30 @@ async fn handle_input_key(app: &mut App, code: KeyCode) {
                         app.input = Some(input);
                     }
                 },
+                InputAction::RotateFlsToken => {
+                    let token = input.value.trim().to_string();
+                    if token.is_empty() {
+                        app.push_log("token cannot be empty");
+                        app.input = Some(input);
+                        return;
+                    }
+                    match fls::decode_metadata(&token) {
+                        Ok(metadata) => {
+                            app.push_log(format!(
+                                "new token HostId={} TokenIndex={} expires {}",
+                                metadata.host_id.as_deref().unwrap_or("unknown"),
+                                metadata.token_index.as_deref().unwrap_or("unknown"),
+                                metadata.expires_at.format("%Y-%m-%d")
+                            ));
+                            app.pending_token = Some(token);
+                            app.pending = Some(PendingAction::RotateFlsToken);
+                        }
+                        Err(e) => {
+                            app.push_log(format!("token decode error: {:#}", e));
+                            app.input = Some(input);
+                        }
+                    }
+                }
             }
         }
         KeyCode::Backspace => {
@@ -1025,6 +1153,7 @@ fn begin_setting_edit(app: &mut App) {
         label: item.def.label.to_string(),
         value,
         action: InputAction::SetSetting,
+        secret: item.def.secret,
     });
 }
 
@@ -1041,6 +1170,7 @@ fn begin_backup_cron_edit(app: &mut App) {
                 .to_string(),
         value: current,
         action: InputAction::SetBackupCron,
+        secret: false,
     });
 }
 
@@ -1055,6 +1185,22 @@ fn begin_backup_keep_edit(app: &mut App) {
         label: "Number of bundles to retain (0 = no pruning). Enter to save.".to_string(),
         value: current,
         action: InputAction::SetBackupKeep,
+        secret: false,
+    });
+}
+
+fn begin_fls_token_rotation(app: &mut App) {
+    if app.token_rotate_task.is_some() {
+        app.push_log("FLS token rotation already running");
+        return;
+    }
+    app.input = Some(InputMode {
+        key: "fls_token".to_string(),
+        label: "Paste new FLS token. It will be masked and validated before confirmation."
+            .to_string(),
+        value: String::new(),
+        action: InputAction::RotateFlsToken,
+        secret: true,
     });
 }
 
@@ -1084,7 +1230,7 @@ async fn execute_pending(app: &mut App) {
     let result = match action {
         PendingAction::StartSietch => sietches::start_primary(&app.cfg).await,
         PendingAction::StopSietch => sietches::stop_primary(&app.cfg).await,
-        PendingAction::RestartSietch => sietches::restart_primary(&app.cfg).await,
+        PendingAction::RestartSietch => restart_primary_applying_settings(&app.cfg).await,
         PendingAction::ApplySettings => settings::apply(&app.cfg).await,
         PendingAction::ApplySettingsAndRestart => match settings::apply(&app.cfg).await {
             Ok(()) => sietches::restart_primary(&app.cfg).await,
@@ -1105,6 +1251,7 @@ async fn execute_pending(app: &mut App) {
             start_clean_shutdown(app);
             Ok(())
         }
+        PendingAction::RotateFlsToken => start_token_rotation(app),
         PendingAction::DeleteBackup => {
             if let Some(entry) = app.backup_entries.get(app.backup_selected) {
                 let path = entry.path.clone();
@@ -1134,7 +1281,9 @@ async fn execute_pending(app: &mut App) {
             }
             if matches!(
                 action,
-                PendingAction::RunUpdate | PendingAction::CleanShutdown
+                PendingAction::RunUpdate
+                    | PendingAction::CleanShutdown
+                    | PendingAction::RotateFlsToken
             ) {
                 return;
             }
@@ -1143,7 +1292,7 @@ async fn execute_pending(app: &mut App) {
                 action,
                 PendingAction::RestartSietch | PendingAction::ApplySettingsAndRestart
             ) {
-                app.push_log("follow-up: verify gateway patch and server browser");
+                app.push_log("follow-up: verify gateway IP and server browser");
             } else if action == PendingAction::ApplySettings {
                 app.push_log("follow-up: restart primary Sietch if settings require it");
             }
@@ -1152,6 +1301,15 @@ async fn execute_pending(app: &mut App) {
         }
         Err(e) => app.push_log(format!("{} error: {:#}", action.label(), e)),
     }
+}
+
+async fn restart_primary_applying_settings(cfg: &Config) -> Result<()> {
+    let drift = settings::drift(cfg).await?;
+    if drift.changed_count() > 0 {
+        settings::apply(cfg).await?;
+    }
+
+    sietches::restart_primary(cfg).await
 }
 
 async fn toggle_selected_setting(app: &mut App) {

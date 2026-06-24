@@ -19,7 +19,7 @@ Doc index:
 - `INSTALLER-DESIGN.md` — future cross-distro installer direction
 - `dune-ctl/OPERATIONS.md` — full `dune-ctl` CLI/TUI reference
 
-**Current state**: Fully running on 64 GB RAM (motherboard upgrade applied 2026-05-17, ~58.9 GB usable). Security hardening applied 2026-05-14; Hagga Basin travel fixed 2026-05-15. The **Live** world `Ixware` (`sh-db3533a2d5a25fb-silakw`, namespace `funcom-seabass-sh-db3533a2d5a25fb-silakw`) is the active capsule; the PTC capsule `Slackware-Arrakis` (`sh-db3533a2d5a25fb-xyyxbx`) is configured but cold. Survival_1 + Overmap run continuously; DeepDesert_1 can run alongside them and is started/stopped explicitly via `map-toggle.sh` or `dune-ctl maps`. Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB headroom (zram + dune-vg SSD + sdc1). VPA recommender live (Off mode, memory only). FLS token expires 2027-05-19 — rotate by 2027-04-19.
+**Current state**: Fully running on 64 GB RAM (motherboard upgrade applied 2026-05-17, ~58.9 GB usable). Security hardening applied 2026-05-14; Hagga Basin travel fixed 2026-05-15. The **Live** world `Ixware` (`sh-db3533a2d5a25fb-silakw`, namespace `funcom-seabass-sh-db3533a2d5a25fb-silakw`) is the active capsule; the PTC capsule `Slackware-Arrakis` (`sh-db3533a2d5a25fb-xyyxbx`) is configured but cold. Survival_1, Overmap, DeepDesert_1, SH_Arrakeen, and SH_HarkoVillage run continuously via director persistence (`MinServers=1` for DD/social hubs). Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB headroom (zram + dune-vg SSD + sdc1). VPA recommender live (Off mode, memory only). FLS token expires 2027-06-22 — rotate by 2027-05-23.
 
 ---
 
@@ -37,7 +37,9 @@ Doc index:
 
 User `conan` (uid 1001), shell `/bin/ksh`. RSS ~9.5 GB.
 
-Occupied ports: UDP 7777, 7778, 14001, 27015 — TCP 25575, 8088.
+Occupied ports: UDP 7777, 7778, 14001, 27015 — TCP 25575, 8088. Dune must
+advertise game UDP ports in `7782-7790`; the active UserEngine.ini profile uses
+`Port=7782` and `IGWPort=7893`.
 
 ---
 
@@ -154,10 +156,10 @@ newer k3s may already support cleaner approaches.
 | `offsite-restore-drill.sh` | End-to-end off-site restore proof: pull newest snapshot from a repo, `pg_restore` into an isolated temp DB in the live Postgres pod, sanity-count, drop. Non-destructive. `--repo <f>`, `--keep`. See `OFFSITE-BACKUP.md` |
 | `system-snapshot.sh` | Full btrfs snapshot of root + backup volume (run as root) |
 | `resource-snapshot.sh` | Capture host + cluster resource state (RSS, requests/limits, pod placement) into `/srv/backups/dune/resource-snapshots/` |
-| `world-capsules.sh` | Inventory and activate cold-swappable world capsules (PTC/Live) |
+| `world-capsules.sh` | Inventory, package/image verification, refresh, and activation for cold-swappable world capsules (PTC/Live) |
 | `funcom-patches.sh` | Re-apply Slackware patches to Funcom-shipped scripts after SteamCMD overwrites (uses baselines in `funcom-patches/`) |
 | `funcom-patches/` | Patched copies of Funcom scripts + `.upstream` baselines for drift detection |
-| `port-preempt.py` | Hold UDP 7779-7781 to prevent Dune game servers from binding ports owned by Path of Titans on the router |
+| `port-preempt.py` | Historical guard holding UDP 7779-7781; Dune now explicitly uses `Port=7782` / `IGWPort=7893` |
 | `sudoer.sh` | One-liner fallback to patch sudoers + restart k3s (emergency use) |
 | `vpa/install.sh` | Install VPA recommender: downloads CRDs, applies RBAC + deployment, runs vpa-objects.sh |
 | `vpa/recommender-rbac.yaml` | ServiceAccount + ClusterRoles + bindings for vpa-recommender in kube-system |
@@ -210,15 +212,17 @@ dune-ctl --world Ixware sietches start|stop|restart
 
 # Maps (handles BattleGroup CR + ServerSetScale.replicas/partitions chain)
 dune-ctl --world Ixware maps list
-dune-ctl --world Ixware maps start DeepDesert_1
-dune-ctl --world Ixware maps stop  DeepDesert_1
+dune-ctl --world Ixware maps persist DeepDesert_1 --on --yes
+dune-ctl --world Ixware maps persist SH_Arrakeen --on --yes
+dune-ctl --world Ixware maps persist SH_HarkoVillage --on --yes
+dune-ctl --world Ixware maps prewarm DeepDesert_1 --yes      # start now after persistence
 
 # Map persistence (director.ini MinServers) — separate layer from start/stop.
 # --on makes the director keep + auto-restart the map (survives reboot); it does
 # NOT start the map now. --off is required before a stop will stick. Writes the
 # live BattleGroup CR and mirrors the capsule source so a cold-swap won't revert.
 dune-ctl --world Ixware maps persist DeepDesert_1 --on  --yes
-dune-ctl --world Ixware maps persist DeepDesert_1 --off --yes
+dune-ctl --world Ixware maps persist DeepDesert_1 --off --yes  # only for deliberate rollback
 
 # Settings (per-world UserSettings profile under ~/.dune/worlds/<bg>/)
 dune-ctl --world Ixware settings status      # local-vs-deployed drift
@@ -321,6 +325,14 @@ Only `startux` and `dune` have authorized keys. Keys are RSA-4096 (defiant's Ope
 
 - `scripts/db-credentials.sh` discovers the live Postgres port from the DatabaseDeployment or service before checking credentials. The old `15432` assumption no longer matches the current operator revision.
 - `scripts/update.sh --post-update-only --start-after` is the resume path after a Funcom update has already completed. It starts the battlegroup and then prints a reminder to verify the gateway's advertised IP via `dune-ctl preflight` (the gateway patch step was retired 2026-06-02).
+- Live capsule updates through the TUI/default `dune-ctl update` path run
+  `world-capsules.sh package install`, `images load`, `images verify`,
+  `refresh`, and `activate --apply --force`. The path requires non-interactive
+  sudo for `kubectl` and `ctr`. On 2026-06-24, `images verify` falsely failed
+  because `sudo ctr ... | grep -q` ran under `pipefail`; `grep -q` could close
+  the pipe after a match and make `ctr` report SIGPIPE. The verifier now reads
+  the image list once before matching, and `dune-ctl` reports the failed
+  subcommand plus recent output.
 
 ### FLS JWT token
 
@@ -328,7 +340,7 @@ The FLS JWT is in each BattleGroup CR set's `arguments` array, in the form:
 ```
 -ini:engine:[FuncomLiveServices]:ServiceAuthToken=<jwt>
 ```
-It appears 28 times (once per map set). **Current token expires 2027-05-19. Rotate by 2027-04-19.**
+It appears once per map set. **Current token expires 2027-06-22. Rotate by 2027-05-23.**
 
 Check expiry at any time: `~/dune-server/dune-ctl/target/release/dune-ctl token-check`
 
@@ -485,12 +497,12 @@ After k3s is up, start the world and verify readiness:
 (No gateway patch step — the gateway advertised IP is operator-managed from the
 k3s `node-external-ip`; `preflight`'s "gateway IP" row confirms it.)
 
-Maps that were running before a reboot may not restart automatically in the
-same shape. Use `dune-ctl --world Ixware maps list` and explicitly start any
-needed travel map such as `DeepDesert_1`. To make a map come back on its own
-after a reboot, mark it director-persistent once with
-`dune-ctl --world Ixware maps persist <Map> --on --yes` — the director then
-keeps and auto-restarts it (`maps list` shows `[persist MinServers=N]`).
+Ixware's normal baseline keeps `DeepDesert_1`, `SH_Arrakeen`, and
+`SH_HarkoVillage` director-persistent (`MinServers=1`) and running. Deep Desert
+stays warm for Tier 5/6 spice/flour resource UX; social hubs stay warm for
+trainer dialogue/travel gates. If one is down after maintenance, use
+`dune-ctl --world Ixware maps prewarm <Map> --yes` to bring it up through the
+director/scaler path.
 
 ---
 
@@ -501,10 +513,10 @@ All 28 maps defined in the BattleGroup CR. Observed RSS values from 2026-05-13 (
 | Map | Limit | Request | Observed RSS | Notes |
 |---|---|---|---|---|
 | `Survival_1` | 12 Gi | 5 Gi | ~3.3 Gi | Main world — always on |
-| `DeepDesert_1` | 10 Gi | 3 Gi | ~954 Mi | Stopped by default; start only with `map-toggle.sh` |
+| `DeepDesert_1` | 10 Gi | 3 Gi | ~954 Mi | Always-on baseline for T5/T6 resource UX |
 | `Overmap` | 1 Gi | 200 Mi | ~165 Mi | Running; swap-backed by request |
-| `SH_Arrakeen` | 1 Gi | 200 Mi | — | Stopped |
-| `SH_HarkoVillage` | 1 Gi | 200 Mi | — | Stopped |
+| `SH_Arrakeen` | 1 Gi | 200 Mi | — | Always-on baseline for trainer quest gates |
+| `SH_HarkoVillage` | 1 Gi | 200 Mi | — | Always-on baseline for trainer quest gates |
 | Story / CB / DLC maps (23 others) | 1–6 Gi | 200 Mi | — | All stopped |
 
 `map-toggle.sh list` shows current on/off state. To start any stopped map:

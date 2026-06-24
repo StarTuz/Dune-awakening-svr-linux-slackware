@@ -1,14 +1,16 @@
 # Planetologist Advanced Trainer — stuck questline (DB investigation)
 
-**Status:** Diagnosis complete (2026-06-02). Confirmed known Funcom bug: the
+**Status:** Diagnosis updated (2026-06-03). Confirmed known Funcom bug: the
 Tier-2 Planetologist contract **"Adhering to Hierarchy"**
-(`ct_trainer_planetologist2_02a`) fails to spawn at Derek's camp after Buried
-Archives. Two reversible tag experiments ruled out the visibility and
-out-of-sequence-Kynes flags (both reverted to baseline). Precise trigger is
-**undetermined from server data** — spawn logic lives in game content. One
-structural anomaly noted (turn-in-flag asymmetry vs healthy trainer lines) but not
-proven causal. DB editing intentionally stopped; **escalate to Funcom**.
-**Severity:** Character-blocking for the affected questline (no in-game recovery found)
+(`ct_trainer_planetologist2_02a`) can fail to spawn at Derek's camp after Buried
+Archives when the Arrakeen social hub is not available. Two reversible tag
+experiments ruled out the visibility and out-of-sequence-Kynes flags (both
+reverted to baseline). The successful recovery was to prewarm `SH_Arrakeen`
+through `ServerSetScale`/director availability, then re-open Derek's camp
+conversation; the first conversation still showed no new branch, the second
+showed the new **"Oh?"** dialogue and the mission advanced. DB editing
+intentionally stopped; **escalate to Funcom**.
+**Severity:** Character-blocking for the affected questline unless required social hubs are running
 **Affects:** Dune: Awakening self-hosted server (Linux, app `4754530`, DB schema
 `1973075-0-shipping`). Likely reproducible on official servers too — the relevant
 state is server-side persisted data, not anything self-host-specific.
@@ -27,11 +29,13 @@ the Advanced Contract 1 "Minimic Film" retrieval that unlocks Tier 2 skills):
 - Derek **never offered the Arrakeen step** (speak to Cyprian Io in the Salusan
   Bull bar re: Kynes' research).
 - At Derek's South Hagga Basin camp, exhausting dialogue / walking away and
-  returning / re-running prior stations did **not** advance the quest.
+  returning / re-running prior stations did **not** advance the quest while
+  `SH_Arrakeen` was stopped.
 
 The documented "bad design, just go back and re-talk to Derek" community
-workarounds were all attempted and did **not** work — this is a genuine stuck
-state, not a missed step.
+workarounds did **not** work until `SH_Arrakeen` was running. After Arrakeen was
+prewarmed, re-opening Derek's camp conversation a second time exposed the "Oh?"
+branch and the quest advanced.
 
 ## What we ruled out
 
@@ -711,25 +715,29 @@ new `sietches.rs` alongside `maps.rs` — **once the world-partition provisionin
 mechanism is understood**; the 2026-06-02 experiment proved replica-only scaling
 is not enough.)
 
-**In-game workarounds reported by players** (no DB edit):
+**In-game workaround confirmed here** (no DB edit):
 
 - ~~Look for Derek near Station 2~~ — N/A: the camp **is** directly above Station
   2; the player is already at the correct location and the contract still does not
   spawn.
 - Check **Station 197** for Derek (Tier-2 location), distinct from Station 76.
-- In **Arrakeen**: speak to the NPC on the **2nd floor** of the bar (Cyprian Io)
-  **and** to "his grandmother" — players report this advancing the line even when
-  Derek never explicitly directs you there. (Untried here.)
+- Prewarm **Arrakeen** through the director/scaler path:
+  `dune-ctl --world Ixware maps prewarm SH_Arrakeen --yes`.
+- Re-open Derek's camp dialogue. In this case, the first conversation after
+  Arrakeen came up still showed no new branch; the second re-initiation showed
+  **"Oh?"** and advanced the mission.
+- Keep both social hubs prewarmed for now:
+  `dune-ctl --world Ixware maps prewarm SH_Arrakeen --yes` and
+  `dune-ctl --world Ixware maps prewarm SH_HarkoVillage --yes`. A similar
+  Swordmaster report mentions Harko/Arrakeen-style destination availability.
 
-All are unreliable per the thread. The Arrakeen route is the only non-destructive
-one not yet attempted.
-
-**Conclusion:** server-side data is consistent and editable, but the spawn
-condition for `ct_trainer_planetologist2_02a` lives in game-content logic and
-cannot be triggered by a DB write we can identify. This is a Funcom-side
-trainer-chain bug; the precise trigger is undetermined from server data, and the
-"out-of-band completion" theory has been withdrawn (player confirms normal
-progression). Recommend: try the Arrakeen workaround; file with Funcom regardless.
+**Conclusion:** server-side data is consistent and editable, but the progression
+bug is not fixed by direct DB tag surgery. The practical root cause is that
+dialogue/quest gating can depend on social-hub destination availability before
+the dialogue branch is evaluated. This is a Funcom-side trainer-chain bug because
+the game should either allocate the required social hub before evaluating the
+branch or evaluate the branch independently of whether the destination map is
+already running.
 
 ---
 
@@ -742,18 +750,22 @@ progression). Recommend: try the Arrakeen workaround; file with Funcom regardles
 - In-game journal shows "Buried Archives" **100% complete** (incl. "Receive
   training from Derek at his camp") with "Additional Contracts will become
   available" — but no further contract ever spawns.
-- **Suspected root cause:** when training was received for Advanced Contract 1,
-  the game set the **wrong flag**. Compared to healthy trainer lines
-  (e.g. ZaynDeWitte), every completed contract has both a
-  `Contract.Tracking.Completed.<NPC>.ContractN` and a
-  `Contract.Target.Dialogue.<NPC>.ContractN.ReturnTo…/CompletedAny` turn-in flag.
-  Derek's advanced line has the completion tag but **no turn-in flag**; instead it
-  has an out-of-sequence `Contract.Target.Dialogue.DerekChinara.Contract4.KynesInvestigationCompleted`.
-  The "additional contracts" trigger's prerequisite is therefore never satisfied.
+- **Suspected root cause:** dialogue/quest gating checks the availability of the
+  Arrakeen social hub before exposing Derek's next branch. With `SH_Arrakeen`
+  stopped, Derek never exposed the Arrakeen/Cyprian step. With `SH_Arrakeen`
+  prewarmed through the director/scaler path, re-opening Derek's dialogue exposed
+  **"Oh?"** and the mission advanced.
+- Secondary anomaly: compared to healthy trainer lines (e.g. ZaynDeWitte),
+  Derek's advanced line still has the completion tag but lacks an obvious
+  same-contract turn-in flag and has
+  `Contract.Target.Dialogue.DerekChinara.Contract4.KynesInvestigationCompleted`.
+  Removing that Kynes flag did **not** restore progression, so it is evidence of
+  odd state but not the proven blocker.
 - World data: only one `TrainerPlanetologist` marker exists (Chinara's Camp,
   Hagga Basin South); the next contract is spawned dynamically, not via a static
   marker — so it is not a "go to a different location" issue.
 - Restarting the game-server process does not clear it (state is in Postgres).
-- Removing the stray Kynes flag did **not** restore progression (so the missing
-  turn-in flag, not the stray flag, is the blocker).
+- Removing the stray Kynes flag did **not** restore progression.
+- Prewarming `SH_Arrakeen` did restore progression after the player re-opened
+  Derek's camp dialogue a second time.
 - DB build/schema tag: `1973075-0-shipping`.

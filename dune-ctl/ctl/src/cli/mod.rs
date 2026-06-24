@@ -4,10 +4,13 @@ use dune_ctl_core::{
     backup, battlegroup, capsules,
     config::{Config, WorldProfile},
     diagnostics::CheckState,
-    fls::FlsTokenState,
+    fls::{self, FlsTokenState},
     health::HealthSnapshot,
     logs, maintenance, maps, players, public_ip, settings, sietches, update,
 };
+
+const DUNE_GAME_PORT_MIN: u16 = 7782;
+const DUNE_GAME_PORT_MAX: u16 = 7790;
 
 #[derive(Subcommand)]
 pub enum Command {
@@ -65,6 +68,11 @@ pub enum Command {
         #[arg(long, default_value = "300")]
         timeout: u64,
     },
+    /// Inspect or rotate the selected world's FLS token
+    Token {
+        #[command(subcommand)]
+        action: TokenCommand,
+    },
     /// Check FLS token expiry; exits non-zero if critical or expired
     TokenCheck,
     /// Inspect or update the selected world's advertised public Internet IP
@@ -104,6 +112,33 @@ pub enum WorldsCommand {
     List,
     /// Create a per-world local UserSettings profile for the selected world
     InitSettings,
+}
+
+#[derive(Subcommand)]
+pub enum TokenCommand {
+    /// Check FLS token expiry; exits non-zero if critical or expired
+    Check,
+    /// Rotate the selected world's self-host FLS token in place
+    Rotate {
+        /// Replacement self-hosting token; prefer --token-file or prompt for secrecy
+        #[arg(long)]
+        token: Option<String>,
+        /// Read replacement self-hosting token from a file
+        #[arg(long)]
+        token_file: Option<String>,
+        /// Print planned changes without writing files or applying Kubernetes resources
+        #[arg(long)]
+        dry_run: bool,
+        /// Apply without refusing at the confirmation gate
+        #[arg(long)]
+        yes: bool,
+        /// Update local capsule files only; do not apply Kubernetes resources
+        #[arg(long)]
+        skip_live: bool,
+        /// Do not wait for gateway/director/primary Sietch readiness after apply
+        #[arg(long)]
+        no_wait: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -260,6 +295,19 @@ pub enum MapsCommand {
     },
     /// Stop a running map
     Stop { name: String },
+    /// Temporarily keep a destination map warm through the director (live CR only)
+    Prewarm {
+        name: String,
+        /// Remove the temporary MinServers floor and stop the map
+        #[arg(long)]
+        off: bool,
+        /// Confirm the live change
+        #[arg(long)]
+        yes: bool,
+        /// Seconds to wait for the map to become ready
+        #[arg(long, default_value = "300")]
+        timeout: u64,
+    },
     /// Toggle director-managed persistence (MinServers) for a map.
     ///
     /// Persistence is separate from start/stop: --on does not start the map
@@ -506,6 +554,7 @@ pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
             skip_backup,
             timeout,
         } => cmd_shutdown(cfg, yes, skip_backup, timeout).await,
+        Command::Token { action } => cmd_token(action, cfg).await,
         Command::TokenCheck => cmd_token_check(cfg).await,
         Command::PublicIp { action } => cmd_public_ip(action, cfg).await,
         Command::Backup { action } => cmd_backup(action, cfg).await,
@@ -818,7 +867,7 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
                 selected_world_label(cfg)
             );
             print_target_summary(cfg);
-            println!("Follow-up   : verify gateway patch and server browser after rollout.");
+            println!("Follow-up   : verify gateway IP and server browser after rollout.");
         }
         SietchesCommand::Edit { advanced } => {
             if advanced {
@@ -871,14 +920,16 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
                 println!("Backing up before adding a Sietch...");
                 backup::run(cfg, false, None).await?;
             }
-            let (plan, _) =
-                sietches::add(cfg, name.as_deref(), password.as_deref(), false).await?;
+            let (plan, _) = sietches::add(cfg, name.as_deref(), password.as_deref(), false).await?;
             println!(
                 "Added Sietch to {}: world partition id={} (dimension {}); active Sietches now {}.",
                 plan.map, plan.new_partition_id, plan.new_dimension, plan.new_replicas
             );
             match &name {
-                Some(n) => println!("Display name: {n:?} (partition id {}).", plan.new_partition_id),
+                Some(n) => println!(
+                    "Display name: {n:?} (partition id {}).",
+                    plan.new_partition_id
+                ),
                 None => println!(
                     "No --name given: this Sietch shares the world's display name. \
                      Set one with `sietches rename {} <name>`.",
@@ -1105,7 +1156,7 @@ async fn cmd_settings(action: SettingsCommand, cfg: &Config) -> Result<()> {
                 selected_world_label(cfg)
             );
             print_target_summary(cfg);
-            println!("Follow-up   : verify gateway patch and server browser after rollout.");
+            println!("Follow-up   : verify gateway IP and server browser after rollout.");
         }
     }
     println!("Local settings: {}", cfg.user_settings_dir().display());
@@ -1275,7 +1326,7 @@ async fn cmd_battlegroup(action: BattlegroupCommand, cfg: &Config) -> Result<()>
             battlegroup::restart(cfg).await?;
             println!("Battlegroup restart triggered.");
             print_target_summary(cfg);
-            println!("Follow-up   : verify gateway patch and server browser after rollout.");
+            println!("Follow-up   : verify gateway IP and server browser after rollout.");
         }
     }
     Ok(())
@@ -1467,6 +1518,7 @@ async fn cmd_preflight(cfg: &Config, strict: bool) -> Result<()> {
         None => PreflightRow::warn("FLS token", "token status unavailable"),
     });
 
+    let map_blockers = preflight_map_blockers(&snap);
     rows.push(
         match (
             snap.battlegroup_stopped,
@@ -1477,21 +1529,36 @@ async fn cmd_preflight(cfg: &Config, strict: bool) -> Result<()> {
                 "server start",
                 format!("battlegroup is stopped; phase {}", phase),
             ),
-            (false, "Healthy", Some(sietch))
+            (false, phase, Some(sietch))
                 if sietch.phase == "Running"
                     && sietch.ready_replicas.unwrap_or_default() > 0
-                    && sietch.consistency == battlegroup::MapConsistency::CleanOn =>
+                    && sietch.consistency == battlegroup::MapConsistency::CleanOn
+                    && map_blockers.is_empty() =>
             {
+                let prefix = if phase == "Healthy" {
+                    "healthy".to_string()
+                } else {
+                    format!("{} with director-managed maps ready", phase)
+                };
                 PreflightRow::ok(
                     "server start",
                     format!(
-                        "healthy; {} ready {}/{}",
+                        "{}; {} ready {}/{}",
+                        prefix,
                         sietch.map,
                         opt_u32(sietch.ready_replicas),
                         opt_u32(sietch.target_replicas)
                     ),
                 )
             }
+            (false, phase, Some(_)) if !map_blockers.is_empty() => PreflightRow::warn(
+                "server start",
+                format!(
+                    "phase {}; map state needs attention: {}",
+                    phase,
+                    map_blockers.join(", ")
+                ),
+            ),
             (false, phase, Some(sietch)) => PreflightRow::warn(
                 "server start",
                 format!(
@@ -1545,6 +1612,8 @@ async fn cmd_preflight(cfg: &Config, strict: bool) -> Result<()> {
         None => PreflightRow::fail("primary Sietch", "primary Sietch not found"),
     });
 
+    rows.push(preflight_game_ports(&snap));
+
     rows.push(match (snap.ram_used_bytes, snap.ram_total_bytes) {
         (Some(used), Some(total)) => {
             let pct = (used as f64 / total as f64) * 100.0;
@@ -1564,6 +1633,40 @@ async fn cmd_preflight(cfg: &Config, strict: bool) -> Result<()> {
     });
 
     print_preflight_rows(cfg, &rows, strict)
+}
+
+fn preflight_game_ports(snap: &HealthSnapshot) -> PreflightRow {
+    let mut active = snap
+        .runtime_servers
+        .iter()
+        .filter(|server| server.phase == "Running" && server.ready)
+        .peekable();
+    if active.peek().is_none() {
+        return PreflightRow::warn("game ports", "no ready runtime servers found");
+    }
+
+    let out_of_range: Vec<String> = active
+        .filter_map(|server| {
+            let port = server.port?;
+            (port < DUNE_GAME_PORT_MIN || port > DUNE_GAME_PORT_MAX)
+                .then(|| format!("{}:{}", server.map, port))
+        })
+        .collect();
+
+    if out_of_range.is_empty() {
+        PreflightRow::ok(
+            "game ports",
+            format!("ready servers advertise UDP {DUNE_GAME_PORT_MIN}-{DUNE_GAME_PORT_MAX}"),
+        )
+    } else {
+        PreflightRow::fail(
+            "game ports",
+            format!(
+                "outside forwarded Dune range {DUNE_GAME_PORT_MIN}-{DUNE_GAME_PORT_MAX}: {}",
+                out_of_range.join(", ")
+            ),
+        )
+    }
 }
 
 fn print_preflight_rows(cfg: &Config, rows: &[PreflightRow], strict: bool) -> Result<()> {
@@ -1611,6 +1714,25 @@ fn opt_u32(value: Option<u32>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "—".to_string())
+}
+
+fn preflight_map_blockers(snap: &HealthSnapshot) -> Vec<String> {
+    snap.maps
+        .iter()
+        .filter(|map| {
+            let expected_active =
+                map.is_persistent() || map.replicas > 0 || map.scale_replicas.unwrap_or(0) > 0;
+            expected_active
+                && matches!(
+                    map.consistency,
+                    battlegroup::MapConsistency::Split
+                        | battlegroup::MapConsistency::Starting
+                        | battlegroup::MapConsistency::Stopping
+                        | battlegroup::MapConsistency::Unknown
+                )
+        })
+        .map(|map| format!("{} {}", map.name, map.consistency.label()))
+        .collect()
 }
 
 fn opt_u16(value: Option<u16>) -> String {
@@ -1721,16 +1843,34 @@ fn start_summary(snap: &HealthSnapshot) -> String {
         );
     }
 
-    if snap.battlegroup_phase == "Healthy"
-        && primary.phase == "Running"
+    let map_blockers = preflight_map_blockers(snap);
+    if primary.phase == "Running"
         && primary.ready_replicas.unwrap_or_default() > 0
         && primary.consistency == battlegroup::MapConsistency::CleanOn
+        && map_blockers.is_empty()
     {
+        let prefix = if snap.battlegroup_phase == "Healthy" {
+            "ready".to_string()
+        } else {
+            format!(
+                "ready; BattleGroup {} with director-managed maps ready",
+                snap.battlegroup_phase
+            )
+        };
         return format!(
-            "ready; {} running {}/{}",
+            "{}; {} running {}/{}",
+            prefix,
             primary.map,
             opt_u32(primary.ready_replicas),
             opt_u32(primary.target_replicas)
+        );
+    }
+
+    if !map_blockers.is_empty() {
+        return format!(
+            "starting/degraded; BattleGroup {}, map state needs attention: {}",
+            snap.battlegroup_phase,
+            map_blockers.join(", ")
         );
     }
 
@@ -1760,9 +1900,34 @@ async fn cmd_maps(action: MapsCommand, cfg: &Config) -> Result<()> {
             }
         }
         MapsCommand::Start { name, force } => {
-            println!("Starting {}...", name);
-            maps::start(cfg, &name, force).await?;
-            println!("{}: start triggered.", name);
+            if maps::is_director_managed_social_hub(&name) && !force {
+                println!(
+                    "Prewarming {} through the director (temporary MinServers=1)...",
+                    name
+                );
+                let outcome = maps::prewarm(cfg, &name).await?;
+                println!(
+                    "{}: director.ini MinServers {} -> {}{}",
+                    name,
+                    opt_u32(outcome.previous),
+                    outcome.applied,
+                    if outcome.cr_changed {
+                        ""
+                    } else {
+                        " (CR already matched)"
+                    }
+                );
+                println!("Waiting up to 300s for {} to become ready...", name);
+                wait_map_ready(cfg, &name, 300).await?;
+                println!(
+                    "{}: ready. This is a live-only prewarm; remove it with `maps prewarm {} --off --yes`.",
+                    name, name
+                );
+            } else {
+                println!("Starting {}...", name);
+                maps::start(cfg, &name, force).await?;
+                println!("{}: start triggered.", name);
+            }
             print_target_summary(cfg);
         }
         MapsCommand::Stop { name } => {
@@ -1781,11 +1946,117 @@ async fn cmd_maps(action: MapsCommand, cfg: &Config) -> Result<()> {
             println!("{}: stop triggered.", name);
             print_target_summary(cfg);
         }
+        MapsCommand::Prewarm {
+            name,
+            off,
+            yes,
+            timeout,
+        } => {
+            cmd_maps_prewarm(cfg, name, off, yes, timeout).await?;
+        }
         MapsCommand::Persist { name, on, off, yes } => {
             cmd_maps_persist(cfg, name, on, off, yes).await?;
         }
     }
     Ok(())
+}
+
+async fn cmd_maps_prewarm(
+    cfg: &Config,
+    name: String,
+    off: bool,
+    yes: bool,
+    timeout: u64,
+) -> Result<()> {
+    if !yes {
+        anyhow::bail!(
+            "refusing to prewarm a map without --yes; this edits the live BattleGroup CR director.ini"
+        );
+    }
+
+    if off {
+        println!("Removing temporary prewarm for {} (MinServers=0)...", name);
+        let outcome = maps::set_persistence(cfg, &name, false, false).await?;
+        println!(
+            "{}: director.ini MinServers {} -> {}{}",
+            name,
+            opt_u32(outcome.previous),
+            outcome.applied,
+            if outcome.cr_changed {
+                ""
+            } else {
+                " (CR already matched)"
+            }
+        );
+        println!(
+            "Stopping {} now that the temporary floor is removed...",
+            name
+        );
+        maps::request_scale(cfg, &name, 0).await?;
+        println!("{}: prewarm removed and stop triggered.", name);
+        print_target_summary(cfg);
+        return Ok(());
+    }
+
+    println!(
+        "Prewarming {} through the director (temporary MinServers=1)...",
+        name
+    );
+    let outcome = maps::prewarm(cfg, &name).await?;
+    println!(
+        "{}: director.ini MinServers {} -> {}{}",
+        name,
+        opt_u32(outcome.previous),
+        outcome.applied,
+        if outcome.cr_changed {
+            ""
+        } else {
+            " (CR already matched)"
+        }
+    );
+    println!("Waiting up to {}s for {} to become ready...", timeout, name);
+    wait_map_ready(cfg, &name, timeout).await?;
+    println!(
+        "{}: ready. This is a live-only prewarm; remove it with `maps prewarm {} --off --yes`.",
+        name, name
+    );
+    print_target_summary(cfg);
+    Ok(())
+}
+
+async fn wait_map_ready(cfg: &Config, name: &str, timeout: u64) -> Result<()> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
+    let mut last = String::new();
+    loop {
+        let snap = HealthSnapshot::collect(cfg).await?;
+        let Some(map) = snap.maps.iter().find(|map| map.name == name) else {
+            anyhow::bail!("map '{}' not found", name);
+        };
+        let summary = format!(
+            "phase={} replicas={} scale={} ready={}/{} state={}",
+            map.phase,
+            map.replicas,
+            opt_u32(map.scale_replicas),
+            opt_u32(map.ready_replicas),
+            opt_u32(map.target_replicas),
+            map.consistency.label()
+        );
+        if summary != last {
+            println!("  {}", summary);
+            last = summary;
+        }
+        if map.ready_replicas.unwrap_or_default() > 0 {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            anyhow::bail!(
+                "timed out waiting for {} to become ready; last state: {}",
+                name,
+                last
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
 }
 
 async fn cmd_maps_persist(
@@ -1834,7 +2105,10 @@ async fn cmd_maps_persist(
             name
         );
     } else {
-        println!("note       : run 'maps stop {}' if you also want it down now.", name);
+        println!(
+            "note       : run 'maps stop {}' if you also want it down now.",
+            name
+        );
     }
     Ok(())
 }
@@ -1905,9 +2179,11 @@ async fn cmd_token_check(cfg: &Config) -> Result<()> {
     match status.state {
         FlsTokenState::Ok => {}
         FlsTokenState::WarningSoon => {
+            let rotate_by = status.expires_at - chrono::Duration::days(30);
             eprintln!(
-                "WARNING: {} days until expiry — rotate token by 2026-08-20.",
-                status.days_remaining
+                "WARNING: {} days until expiry; rotate token by {}.",
+                status.days_remaining,
+                rotate_by.format("%Y-%m-%d")
             );
         }
         FlsTokenState::Critical => {
@@ -1920,6 +2196,97 @@ async fn cmd_token_check(cfg: &Config) -> Result<()> {
         }
     }
     Ok(())
+}
+
+async fn cmd_token(action: TokenCommand, cfg: &Config) -> Result<()> {
+    match action {
+        TokenCommand::Check => cmd_token_check(cfg).await,
+        TokenCommand::Rotate {
+            token,
+            token_file,
+            dry_run,
+            yes,
+            skip_live,
+            no_wait,
+        } => {
+            let token = read_rotation_token(token, token_file)?;
+            let report = fls::rotate_token(
+                cfg,
+                &token,
+                fls::TokenRotateOptions {
+                    dry_run,
+                    yes,
+                    skip_live,
+                    wait: !no_wait,
+                },
+            )
+            .await?;
+            print_token_rotation_report(&report, dry_run);
+            Ok(())
+        }
+    }
+}
+
+fn read_rotation_token(token: Option<String>, token_file: Option<String>) -> Result<String> {
+    match (token, token_file) {
+        (Some(_), Some(_)) => {
+            anyhow::bail!("use either --token or --token-file, not both");
+        }
+        (Some(token), None) => Ok(token.trim().to_string()),
+        (None, Some(path)) => std::fs::read_to_string(&path)
+            .map(|s| s.trim().to_string())
+            .map_err(|e| anyhow::anyhow!("failed to read token file {}: {}", path, e)),
+        (None, None) => rpassword::prompt_password("New FLS token: ")
+            .map(|s| s.trim().to_string())
+            .map_err(|e| anyhow::anyhow!("failed to read token: {}", e)),
+    }
+}
+
+fn print_token_rotation_report(report: &fls::TokenRotationReport, dry_run: bool) {
+    println!(
+        "FLS token rotation {}",
+        if dry_run { "plan" } else { "complete" }
+    );
+    println!("HostId     : {}", report.expected_host_id);
+    println!(
+        "TokenIndex : {}",
+        report.metadata.token_index.as_deref().unwrap_or("unknown")
+    );
+    println!(
+        "Expires    : {} ({})",
+        report.metadata.expires_at.format("%Y-%m-%d %H:%M UTC"),
+        report.metadata.label()
+    );
+    println!("Files      : {}", report.battlegroup_yaml.display());
+    println!("           : {}", report.fls_secret_yaml.display());
+    println!(
+        "Replaced   : {} game args, {} utility env vars, {} FLS secret",
+        report.server_arg_replacements,
+        report.utility_env_replacements,
+        report.fls_secret_replacements
+    );
+    if report.stop_forced_false {
+        println!("Stop flag  : restored stop=false for running world");
+    }
+    if let Some(path) = &report.battlegroup_backup {
+        println!("Backup     : {}", path.display());
+    }
+    if let Some(path) = &report.fls_secret_backup {
+        println!("Backup     : {}", path.display());
+    }
+    println!(
+        "Kubernetes : {}",
+        if report.applied_live {
+            "applied"
+        } else if dry_run {
+            "dry-run only"
+        } else {
+            "skipped by --skip-live"
+        }
+    );
+    if report.waited_ready {
+        println!("Readiness  : gateway/director/RMQ/primary Sietch ready");
+    }
 }
 
 async fn cmd_backup(action: BackupCommand, cfg: &Config) -> Result<()> {

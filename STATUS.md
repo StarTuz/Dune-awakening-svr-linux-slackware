@@ -1,6 +1,10 @@
 # Dune Server Setup — Status
 
-Last updated: 2026-05-26 — active capsule is now the Live world `Ixware` (`sh-db3533a2d5a25fb-silakw`). PTC capsule `Slackware-Arrakis` (`sh-db3533a2d5a25fb-xyyxbx`) is configured but cold. Earlier sections of this document still describe PTC-era validation and remain useful as history.
+Last updated: 2026-06-24 — active capsule is the Live world `Ixware`
+(`sh-db3533a2d5a25fb-silakw`) on image `2007976-0-shipping` / Steam build
+`23894313`. PTC capsule `Slackware-Arrakis` (`sh-db3533a2d5a25fb-xyyxbx`) is
+configured but cold. Earlier sections of this document still describe PTC-era
+validation and remain useful as history.
 
 ## Current state ✅
 
@@ -11,7 +15,7 @@ Last updated: 2026-05-26 — active capsule is now the Live world `Ixware` (`sh-
 | cert-manager | cert-manager, cainjector, webhook | Running |
 | funcom-operators | battlegroupoperator, databaseoperator, serveroperator, utilitiesoperator | Running |
 | funcom-seabass-sh-db3533a2d5a25fb-silakw | postgres, rabbitmq, gateway, director, text-router, filebrowser | Running |
-| funcom-seabass-sh-db3533a2d5a25fb-silakw | Survival_1 + Overmap | Running (Live capsule; DeepDesert_1 started on demand) |
+| funcom-seabass-sh-db3533a2d5a25fb-silakw | Survival_1 + Overmap + DeepDesert_1 + SH_Arrakeen + SH_HarkoVillage | Running (Live capsule; DD/social hubs director-persistent with `MinServers=1`) |
 
 Active battlegroup: `sh-db3533a2d5a25fb-silakw` ("Ixware", Live, region North America), Phase: Healthy (verified `kubectl get battlegroups -A` 2026-05-26, ~7d age, 8h uptime).
 
@@ -22,6 +26,29 @@ Security audit state:
 - The audit is still useful after every gateway or update change, because Funcom patches can regenerate the gateway deployment and shift what is exposed.
 
 ## FLS server browser (PTC-era history)
+
+### Live token revocation incident (2026-06-22)
+
+Live `Ixware` disappeared from the in-game browser and login failed even though
+the local stack was healthy after a Slackware/current update recovery. The
+Funcom account page no longer showed the existing self-host token, while the
+local JWT still decoded as unexpired. Gateway and director logs both returned:
+
+```text
+403002 ACCESS_DENIED
+Could not find service authorization information for Battlegroup: sh-db3533a2d5a25fb-silakw
+```
+
+Root cause assessment: Funcom/FLS no longer had, or no longer accepted, the
+service authorization record for the existing battlegroup token. This was not a
+world data problem and did not require a rebuild.
+
+Fix applied: generated a new self-host token from the account portal, verified
+the token `HostId` still matched `DB3533A2D5A25FB`, rotated it into the existing
+Live capsule/BattleGroup/FLS secret, and restarted through the operator. Browser
+visibility and login returned; world data was intact. See
+`dune-ctl/OPERATIONS.md` > `FLS token backend revocation` for the repeatable
+runbook.
 
 > **Historical** — this section describes validation of the **PTC** world
 > `Slackware-Arrakis` in May 2026, before the Live `Ixware` cutover. Live
@@ -138,7 +165,23 @@ By default the wrapper leaves the battlegroup stopped after a successful update.
 Use `~/dune-server/scripts/update.sh --start-after` if you want it restarted
 automatically.
 
-The Funcom Windows deployment runs `battlegroup.bat` → `battlegroup.ps1` → SSH into VM → `battlegroup.sh update`. Our setup adds backup, stop, `validate` pre-fetch, Slackware patch re-application, DB credential verification/repair, and the gateway patch around that.
+The Funcom Windows deployment runs `battlegroup.bat` → `battlegroup.ps1` → SSH into VM → `battlegroup.sh update`. Our legacy wrapper adds backup, stop, `validate` pre-fetch, Slackware patch re-application, DB credential verification/repair, and gateway advertised-IP verification.
+
+For the active Live capsule, the TUI/default `dune-ctl update` path uses
+`scripts/world-capsules.sh` instead: backup, Live package install/validate,
+image import, image verify, capsule refresh, capsule apply, start, and
+wait-ready. It requires non-interactive sudo for `kubectl` and `ctr`.
+
+2026-06-24 update incident: Steam build `23894313` installed and image
+`2007976-0-shipping` imported, but the TUI update failed at
+`world-capsules.sh images verify` before capsule refresh/apply. The active
+BattleGroup stayed on `1988751-0-shipping` until the capsule was manually
+refreshed/applied. Root cause was the verifier using
+`sudo ctr -n k8s.io images ls -q | grep -q` under `pipefail`; `grep -q` can
+close the pipe early after a match, making `ctr` exit via SIGPIPE and producing
+a false missing-image result. Fixed by reading the containerd image list once
+and matching against that stable list. `dune-ctl` now also reports the exact
+failed capsule subcommand and recent output.
 
 2026-05-15 update note: Funcom added three maps to `experimental_swap.sh`
 (`CB_Overland_S_07`, `CB_Overland_S_08`, `CB_Dungeon_ThePit`). The local
@@ -154,11 +197,13 @@ older `15432` value.
 
 ## RAM picture
 
-- Physical RAM: 16 GB
+- Physical RAM: 64 GB (~58.9 GB usable)
 - Conan Exiles Enhanced (co-tenant): ~9.5 GB RSS
-- Available: ~6.5 GB
-- Game servers in use (Survival_1 + Overmap): ~3.5 Gi RSS (DeepDesert_1 currently stopped)
-- **Result: servers fit in available RAM. Swap is not under pressure.**
+- Live always-on game surfaces: Survival_1 + Overmap + DeepDesert_1 +
+  SH_Arrakeen + SH_HarkoVillage.
+- Recent observed host RAM after enabling DD/social hubs: ~29/58.9 GB used.
+- **Result: always-on DD/social baseline fits in available RAM. Swap is not
+  under pressure.**
 
 Total swap: **62 GB** (zram 15.5 + dune-vg SSD 32 + sdc1 15.4) — headroom only.
 
@@ -192,8 +237,11 @@ power-down. To make a map come back on its own, toggle it persistent with
 `dune-ctl --world Ixware maps persist <Map> --on --yes` (writes the live CR and
 mirrors the capsule `battlegroup.yaml`; `--off` reverts). `--on` does not start
 the map now and `--off` is required before a `maps stop` will stick. `maps list`
-/ `status` / the TUI show persistence state. Social hubs (`SH_*`) are left on the
-director's on-demand handshake by default and should not be forced persistent.
+/ `status` / the TUI show persistence state. Current baseline keeps
+`DeepDesert_1`, `SH_Arrakeen`, and `SH_HarkoVillage` director-persistent
+(`MinServers=1`) and running. Deep Desert needs warm uptime for spice/flour
+field systems during Tier 5/6 progression; social hubs stay warm for trainer
+dialogue/travel gates. Do not remove their persistence during normal operation.
 
 ## VPA memory recommendations
 
@@ -234,11 +282,11 @@ All items applied. Details in CLAUDE.md § Security.
 | PostgreSQL passwords rotated | ✅ ALTER USER applied; CR + on-disk YAML updated |
 | k3s API `bind-address: 127.0.0.1` | ❌ REVERTED — breaks pod→API DNAT; firewall is sufficient |
 | SNMP disabled | ✅ off |
-| FLS token expiry tracking | ✅ in dune-ctl (`token-check`); token expires 2027-05-19, rotate by 2027-04-19 |
+| FLS token expiry tracking | ✅ in dune-ctl (`token check`, `token rotate`); token expires 2027-06-22, rotate by 2027-05-23 |
 | dune-ctl world targeting | ✅ `worlds list`, `--world`, and per-world settings profiles; used to cut over PTC→Live |
 | dune-ctl primary Sietch lifecycle | ✅ `sietches list/start/stop/restart`; start/stop/restart currently map to selected BattleGroup lifecycle |
 | dune-ctl Sietch settings workflow | ✅ TUI shows name/password state and setting drift; `settings status` summarizes local-vs-deployed changes; `settings pull` syncs deployed User*.ini to local; `settings apply`/`apply-restart` require `--force` while drift exists |
-| dune-ctl preflight | ✅ `preflight` checks firewall backend, gateway patch, FLS token, primary Sietch, settings drift, and RAM; `--strict` fails on warnings |
+| dune-ctl preflight | ✅ `preflight` checks firewall backend, gateway advertised IP, FLS token, primary Sietch, runtime game ports, settings drift, and RAM; `--strict` fails on warnings |
 | Per-world settings profiles | ✅ Live: `~/.dune/worlds/sh-db3533a2d5a25fb-silakw/UserSettings`; PTC (cold): `~/.dune/worlds/sh-db3533a2d5a25fb-xyyxbx/UserSettings` |
 
 ## Live cutover (completed)
@@ -312,7 +360,7 @@ firewall-cmd --reload
 
 **Do not use the old S2S-window workaround**: `scripts/s2s-watchdog.sh` was removed. The previous theory that players had to connect during a short Farm-session window was wrong for this incident.
 
-**Related cleanup**: DeepDesert_1 was also corrected to a clean stopped state (`BattleGroup replicas=0`, `ServerSetScale=0`). The previous split state (`replicas=1`, `ServerSetScale=0`) caused confusing farm-size/partition-8 noise in logs and should not be treated as normal.
+**Historical cleanup**: DeepDesert_1 was previously corrected to a clean stopped state (`BattleGroup replicas=0`, `ServerSetScale=0`). That was right for the older low-footprint model. The current normal model is DD persistent/running with `MinServers=1` and `ServerSetScale=1`; the still-bad split state is `BattleGroup replicas=1` with `ServerSetScale=0`.
 
 ## 2026-05-17 reboot/memory-upgrade recovery
 
@@ -370,7 +418,7 @@ Both `scripts/map-toggle.sh` and `dune-ctl/core/src/maps.rs` were updated so `st
   the Drive leg from `rclone copy`+crypt to a second restic repo after rclone
   1.74.3 `copy` hit an intermittent `fs/cache` panic unsafe for unattended cron.
 - [ ] Create `settings.conf` (`printf '\n\n\n47.145.31.211\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
-- [ ] **Rotate FLS token before 2027-04-19** (expires 2027-05-19) — update BattleGroup CR args (28 occurrences) + re-apply gateway patch
+- [ ] **Rotate FLS token before 2027-05-23** (expires 2027-06-22) — use `dune-ctl --world Ixware token rotate --token-file <path> --dry-run`, then rerun with `--yes`
 - [x] **Set sietch password before official launch** — set 2026-05-29 on the Live world `Ixware` (`Bgd.ServerLoginPassword` present in `~/.dune/worlds/sh-db3533a2d5a25fb-silakw/UserSettings/UserEngine.ini`, deployed, no settings drift). The server is password-protected in the public FLS browser. Change later with `dune-ctl settings set sietch_password <password> && dune-ctl settings apply`.
 - [x] dune-ctl operational polish — world targeting, primary Sietch lifecycle,
   settings drift guard, per-world settings profile, and TUI settings polish are
