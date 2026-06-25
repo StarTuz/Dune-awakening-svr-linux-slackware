@@ -13,6 +13,7 @@ pub const CRON_MARKER: &str = "# dune-ctl-backup";
 pub struct ScheduleInfo {
     pub cron: String,
     pub keep: usize,
+    pub offsite: bool,
 }
 
 /// Read the installed backup schedule from the user's crontab.
@@ -33,16 +34,29 @@ pub fn read_schedule() -> Option<ScheduleInfo> {
         .find(|w| w[0] == "--keep")
         .and_then(|w| w[1].parse::<usize>().ok())
         .unwrap_or(14);
-    Some(ScheduleInfo { cron, keep })
+    let offsite = fields.iter().any(|f| *f == "--offsite");
+    Some(ScheduleInfo {
+        cron,
+        keep,
+        offsite,
+    })
 }
 
 /// Install or update the backup schedule in the user's crontab.
-pub fn write_schedule(battlegroup: &str, binary_path: &str, cron: &str, keep: usize) -> Result<()> {
+/// When `offsite` is true the scheduled job also replicates off-site (`--offsite`).
+pub fn write_schedule(
+    battlegroup: &str,
+    binary_path: &str,
+    cron: &str,
+    keep: usize,
+    offsite: bool,
+) -> Result<()> {
     let current = read_crontab()?;
     let stripped = strip_schedule_line(&current);
+    let offsite_arg = if offsite { " --offsite" } else { "" };
     let entry = format!(
-        "{}  DUNE_CTL_WORLD={} {} backup run --keep {}  {}",
-        cron, battlegroup, binary_path, keep, CRON_MARKER,
+        "{}  DUNE_CTL_WORLD={} {} backup run --keep {}{}  {}",
+        cron, battlegroup, binary_path, keep, offsite_arg, CRON_MARKER,
     );
     let new_crontab = if stripped.is_empty() {
         format!("{}\n", entry)
