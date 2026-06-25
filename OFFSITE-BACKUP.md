@@ -192,10 +192,28 @@ scripts/offsite-sync.sh check       # verify integrity of both
 scripts/offsite-sync.sh --repo b2 check
 ```
 
+## dune-ctl integration
+
+`offsite-sync.sh` is also reachable through `dune-ctl` (it shells out to the
+script, reading `~/.dune/offsite.env`):
+
+```sh
+dune-ctl backup run --keep 14 --offsite   # local backup, then push off-site
+dune-ctl backup offsite                    # push off-site only (both repos)
+dune-ctl backup offsite --check            # integrity-check both repos
+dune-ctl backup offsite --snapshots        # list snapshots in both repos
+```
+
+`--offsite` runs the off-site push only after the local bundle (and any
+retention) succeed. Requires a `dune-ctl` built from a branch that includes the
+feature.
+
 ## Automation
 
 The nightly local backup runs at 03:00 via the `dune` crontab
-(`dune-ctl backup run --keep 14`). Chain the off-site push after it:
+(`dune-ctl backup run --keep 14`). Chain the off-site push after it. (Once a
+`dune-ctl` with `--offsite` is deployed, the two lines below can be collapsed
+into a single `dune-ctl backup run --keep 14 --offsite`.)
 
 ```cron
 # existing local backup
@@ -289,5 +307,6 @@ after the 30-day lock window.
 - Conan co-tenant has no off-site story yet (`/srv/backups/conan`, owned
   `conan:users`). The same pattern applies but must run as `conan`.
 - Decide retention cadence, or accept keep-everything (dedup keeps it cheap).
-- Wire the off-site push into `dune-ctl` (e.g. `dune-ctl backup run --offsite`)
-  so the TUI Backups tab reflects off-site status.
+- [done] CLI wiring: `dune-ctl backup run --offsite` and `dune-ctl backup
+  offsite [--check|--snapshots]`. Surfacing off-site status in the TUI Backups
+  tab is still future work.
