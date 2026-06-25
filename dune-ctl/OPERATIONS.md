@@ -451,6 +451,10 @@ dune-ctl backup list                          # list bundles, newest first
 dune-ctl backup run                           # full backup (DB + metadata)
 dune-ctl backup run --skip-db                 # metadata/settings only (fast, ~5s)
 dune-ctl backup run --keep 14                 # run + prune to 14 most recent
+dune-ctl backup run --keep 14 --offsite       # then replicate off-site (B2 + Drive)
+dune-ctl backup offsite                        # push off-site only (both restic repos)
+dune-ctl backup offsite --check               # integrity-check both off-site repos
+dune-ctl backup offsite --snapshots           # list off-site snapshots
 dune-ctl backup restore --yes 20260517-021045 # restore by timestamp
 dune-ctl backup restore --yes /srv/backups/dune/<env>/<bg>/20260517-021045  # by path
 dune-ctl backup schedule                      # install nightly cron at 3am, keep 14
@@ -458,6 +462,11 @@ dune-ctl backup schedule --cron "0 2 * * *" --keep 7   # custom schedule
 dune-ctl backup schedule --show               # print installed schedule
 dune-ctl backup schedule --remove             # remove scheduled job
 ```
+
+`--offsite` / `backup offsite` shell out to `scripts/offsite-sync.sh`, which
+replicates the `live/` bundles to two encrypted restic repos (Backblaze B2 with
+Object Lock + Google Drive), reading config from `~/.dune/offsite.env`. Full
+design, account setup, and the import-drill runbook are in `OFFSITE-BACKUP.md`.
 
 ### Restore procedure
 

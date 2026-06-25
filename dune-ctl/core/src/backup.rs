@@ -153,6 +153,20 @@ pub async fn run(cfg: &Config, skip_db: bool, name: Option<&str>) -> Result<()> 
     stream_command(cmd, &script.display().to_string()).await
 }
 
+/// Run offsite-sync.sh to replicate the local bundles to the off-site restic
+/// repositories (Backblaze B2 + Google Drive). `action` is one of:
+/// `run`, `check`, `snapshots`, `init`, `prune`. Configuration and secrets are
+/// read by the script from `~/.dune/offsite.env`; see `OFFSITE-BACKUP.md`.
+pub async fn offsite_sync(cfg: &Config, action: &str) -> Result<()> {
+    let script = cfg.scripts_dir.join("offsite-sync.sh");
+    if !script.exists() {
+        anyhow::bail!("offsite-sync.sh not found at {}", script.display());
+    }
+    let mut cmd = Command::new("bash");
+    cmd.arg(&script).arg(action);
+    stream_command(cmd, &script.display().to_string()).await
+}
+
 /// Restore a database backup. `bundle` is a timestamp (e.g. "20260517-142305") or
 /// a full path to a bundle directory under /srv/backups/dune/<env>/<bg>/.
 /// Stages the .backup file from bundle/database/ into the funcom artifacts dir,

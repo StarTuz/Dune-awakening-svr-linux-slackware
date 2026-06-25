@@ -385,6 +385,18 @@ pub enum BackupCommand {
         /// Keep only the N most recent bundles after a successful run (0 = no pruning)
         #[arg(long, default_value = "0")]
         keep: usize,
+        /// After a successful local backup, replicate off-site (B2 + Google Drive)
+        #[arg(long)]
+        offsite: bool,
+    },
+    /// Replicate backups off-site to two restic repos (Backblaze B2 + Google Drive)
+    Offsite {
+        /// Verify off-site repository integrity instead of pushing a backup
+        #[arg(long)]
+        check: bool,
+        /// List snapshots in the off-site repositories instead of pushing
+        #[arg(long)]
+        snapshots: bool,
     },
     /// Restore from a backup bundle (requires --yes)
     Restore {
@@ -1941,6 +1953,7 @@ async fn cmd_backup(action: BackupCommand, cfg: &Config) -> Result<()> {
             skip_db,
             name,
             keep,
+            offsite,
         } => {
             println!("Starting backup for {}...", cfg.battlegroup);
             backup::run(cfg, skip_db, name.as_deref()).await?;
@@ -1955,6 +1968,20 @@ async fn cmd_backup(action: BackupCommand, cfg: &Config) -> Result<()> {
                     println!("Retention: kept {} most recent bundles.", keep);
                 }
             }
+            if offsite {
+                println!("Replicating off-site (restic -> Backblaze B2 + Google Drive)...");
+                backup::offsite_sync(cfg, "run").await?;
+            }
+        }
+        BackupCommand::Offsite { check, snapshots } => {
+            let action = if check {
+                "check"
+            } else if snapshots {
+                "snapshots"
+            } else {
+                "run"
+            };
+            backup::offsite_sync(cfg, action).await?;
         }
         BackupCommand::Schedule {
             show,
