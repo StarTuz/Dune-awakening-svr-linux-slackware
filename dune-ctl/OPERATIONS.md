@@ -565,8 +565,9 @@ dune-ctl backup offsite --snapshots           # list off-site snapshots
 dune-ctl backup restore --yes 20260517-021045 # restore by timestamp
 dune-ctl backup restore --yes /srv/backups/dune/<env>/<bg>/20260517-021045  # by path
 dune-ctl backup schedule                      # install nightly cron at 3am, keep 14
+dune-ctl backup schedule --keep 14 --offsite  # nightly local backup + off-site push
 dune-ctl backup schedule --cron "0 2 * * *" --keep 7   # custom schedule
-dune-ctl backup schedule --show               # print installed schedule
+dune-ctl backup schedule --show               # print installed schedule (incl. Off-site)
 dune-ctl backup schedule --remove             # remove scheduled job
 ```
 
@@ -606,11 +607,14 @@ command defaults to `--keep 14` (two weeks of daily backups).
 `dune-ctl backup schedule` installs an entry in the `dune` user's crontab:
 
 ```
-0 3 * * *   DUNE_CTL_WORLD=<bg> /path/to/dune-ctl backup run --keep 14  # dune-ctl-backup
+0 3 * * *   DUNE_CTL_WORLD=<bg> /path/to/dune-ctl backup run --keep 14 [--offsite]  # dune-ctl-backup
 ```
 
-The `# dune-ctl-backup` marker lets subsequent `schedule` calls find and
-replace that line without touching anything else in the crontab.
+`--offsite` is appended when `schedule --offsite` is used, so the scheduled job
+also replicates to the off-site restic repos (see `OFFSITE-BACKUP.md`).
+`schedule --show` reports the off-site state, and the TUI cron/keep editors
+preserve it. The `# dune-ctl-backup` marker lets subsequent `schedule` calls
+find and replace that line without touching anything else in the crontab.
 
 ---
 

@@ -468,6 +468,9 @@ pub enum BackupCommand {
         /// Bundles to retain when the scheduled job runs
         #[arg(long, default_value = "14")]
         keep: usize,
+        /// Also replicate off-site (B2 + Google Drive) in the scheduled job
+        #[arg(long)]
+        offsite: bool,
     },
 }
 
@@ -2355,8 +2358,9 @@ async fn cmd_backup(action: BackupCommand, cfg: &Config) -> Result<()> {
             remove,
             cron,
             keep,
+            offsite,
         } => {
-            cmd_schedule(show, remove, &cron, keep, cfg)?;
+            cmd_schedule(show, remove, &cron, keep, offsite, cfg)?;
         }
         BackupCommand::Restore { bundle, yes } => {
             if !yes {
@@ -2414,12 +2418,20 @@ async fn cmd_players(cfg: &Config) -> Result<()> {
     Ok(())
 }
 
-fn cmd_schedule(show: bool, remove: bool, cron: &str, keep: usize, cfg: &Config) -> Result<()> {
+fn cmd_schedule(
+    show: bool,
+    remove: bool,
+    cron: &str,
+    keep: usize,
+    offsite: bool,
+    cfg: &Config,
+) -> Result<()> {
     if show {
         match backup::read_schedule() {
             Some(info) => {
                 println!("Schedule : {}", info.cron);
                 println!("Keep     : {} bundles", info.keep);
+                println!("Off-site : {}", if info.offsite { "yes" } else { "no" });
             }
             None => println!("No dune-ctl backup schedule installed."),
         }
@@ -2435,12 +2447,26 @@ fn cmd_schedule(show: bool, remove: bool, cron: &str, keep: usize, cfg: &Config)
     let bin = std::env::current_exe().unwrap_or_else(|_| {
         std::path::PathBuf::from("/home/dune/dune-server/dune-ctl/target/release/dune-ctl")
     });
-    backup::write_schedule(&cfg.battlegroup, &bin.to_string_lossy(), cron, keep)?;
+    backup::write_schedule(
+        &cfg.battlegroup,
+        &bin.to_string_lossy(),
+        cron,
+        keep,
+        offsite,
+    )?;
     println!("Backup schedule installed:");
     println!("  Schedule : {}", cron);
     println!("  Binary   : {}", bin.display());
     println!("  World    : {}", cfg.battlegroup);
     println!("  Keep     : {} most recent bundles", keep);
+    println!(
+        "  Off-site : {}",
+        if offsite {
+            "yes (B2 + Google Drive)"
+        } else {
+            "no"
+        }
+    );
     println!();
     println!("Verify with: dune-ctl backup schedule --show");
     Ok(())

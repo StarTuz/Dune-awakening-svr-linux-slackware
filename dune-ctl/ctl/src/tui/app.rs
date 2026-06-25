@@ -1048,8 +1048,19 @@ async fn handle_input_key(app: &mut App, code: KeyCode) {
                 }
                 InputAction::SetBackupCron => {
                     let keep = app.backup_schedule.as_ref().map(|s| s.keep).unwrap_or(14);
+                    let offsite = app
+                        .backup_schedule
+                        .as_ref()
+                        .map(|s| s.offsite)
+                        .unwrap_or(false);
                     let bin = current_exe_path();
-                    match backup::write_schedule(&app.cfg.battlegroup, &bin, &input.value, keep) {
+                    match backup::write_schedule(
+                        &app.cfg.battlegroup,
+                        &bin,
+                        &input.value,
+                        keep,
+                        offsite,
+                    ) {
                         Ok(()) => {
                             app.backup_schedule = backup::read_schedule();
                             app.push_log(format!("schedule cron set to {}", input.value));
@@ -1067,8 +1078,19 @@ async fn handle_input_key(app: &mut App, code: KeyCode) {
                             .as_ref()
                             .map(|s| s.cron.clone())
                             .unwrap_or_else(|| "0 3 * * *".to_string());
+                        let offsite = app
+                            .backup_schedule
+                            .as_ref()
+                            .map(|s| s.offsite)
+                            .unwrap_or(false);
                         let bin = current_exe_path();
-                        match backup::write_schedule(&app.cfg.battlegroup, &bin, &cron, keep) {
+                        match backup::write_schedule(
+                            &app.cfg.battlegroup,
+                            &bin,
+                            &cron,
+                            keep,
+                            offsite,
+                        ) {
                             Ok(()) => {
                                 app.backup_schedule = backup::read_schedule();
                                 app.push_log(format!("schedule keep set to {}", keep));
