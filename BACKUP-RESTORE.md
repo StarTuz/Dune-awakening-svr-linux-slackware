@@ -233,8 +233,9 @@ handled by the database operator on this single-node local-path setup.
   path, object storage, or a PVC in this package.
 - Whether scheduled `DatabaseBackupSchedule` is worth enabling for this
   single-node host once logical dumps are proven.
-- Off-host replication target: NAS via `rsync`, cloud via `rclone`, or both
-  (currently backups are local-only on `dune-vg/backups`).
+- Off-host replication target: **live** — two restic repos via rclone,
+  Backblaze B2 (Object Lock immutable) + Google Drive, via
+  `scripts/offsite-sync.sh` (nightly cron). See `OFFSITE-BACKUP.md`.
 - Restore drill cadence. A backup should not be considered proven until an
   import has been tested on a disposable battlegroup or fresh cluster.
 
@@ -256,8 +257,11 @@ Assessed on 2026-05-19:
 - Physical Funcom backup resources (`DatabaseBackup`,
   `DatabaseBackupSchedule`, `DatabaseMigrate`, `DatabaseRestore`) are not in
   use. The proven layer is logical dump/import only.
-- Backups remain local-only on `/srv/backups/dune`; off-host replication is not
-  solved.
+- Off-host replication is **live and verified** (`scripts/offsite-sync.sh`,
+  `OFFSITE-BACKUP.md`): two restic repos via rclone — Backblaze B2 (30-day
+  Governance Object Lock, immutable) + Google Drive — both encrypted with one
+  escrowed passphrase, `restic check` clean, restore drill byte-identical from
+  each. Nightly cron 03:20 (both) + weekly check Sun 04:30.
 - Existing PTC bundles have been migrated to
   `/srv/backups/dune/ptc/sh-db3533a2d5a25fb-xyyxbx/` and stamped with
   `environment=ptc` in their manifests.

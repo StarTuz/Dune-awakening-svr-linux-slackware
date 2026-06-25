@@ -348,7 +348,16 @@ Both `scripts/map-toggle.sh` and `dune-ctl/core/src/maps.rs` were updated so `st
 - [x] Add and verify Dune backup/restore runbook and host backup wrapper — full DB backup succeeded 2026-05-15; see `BACKUP-RESTORE.md` and `scripts/dune-backup.sh`
 - [x] Schedule Dune backup jobs writing to `/srv/backups/dune/` — `dune-ctl backup schedule` installs nightly cron at 03:00, keeps 14
 - [ ] Set up Conan backup jobs writing to `/srv/backups/conan/`
-- [ ] Off-server backup strategy (rsync to NAS / rclone to cloud — TBD)
+- [x] Off-server backup strategy — **live + verified 2026-06-24**
+  (`OFFSITE-BACKUP.md`, `scripts/offsite-sync.sh`): two restic repos via rclone —
+  Backblaze B2 (bucket `dune-backups-offsite`, 30-day Governance Object Lock,
+  immutable) + Google Drive (`drive.file` scope) — both encrypted with one
+  escrowed master passphrase (`~/.dune/offsite-restic-pass`, in password manager
+  + printed). `restic check` clean on both; restore drill byte-identical from
+  each. Nightly cron 03:20 + weekly check Sun 04:30. `restic` 0.19.0 / `rclone`
+  1.74.3 in `~/.local/bin`. Switched the Drive leg from `rclone copy`+crypt to a
+  second restic repo after rclone 1.74.3 `copy` hit an intermittent `fs/cache`
+  panic unsafe for unattended cron.
 - [ ] Create `settings.conf` (`printf '\n\n\n47.145.31.211\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
 - [ ] **Rotate FLS token before 2027-04-19** (expires 2027-05-19) — update BattleGroup CR args (28 occurrences) + re-apply gateway patch
 - [ ] **Set sietch password before official launch** — no password is set (fine for PTC; FLS browser not widely used yet). At official release the server is publicly visible to all players. Set with `dune-ctl settings set sietch_password <password> && dune-ctl settings apply` before going live on the official world.
