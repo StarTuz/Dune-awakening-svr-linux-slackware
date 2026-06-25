@@ -260,16 +260,15 @@ if [ "$start_after" -eq 1 ]; then
     echo "=== Starting battlegroup after update ==="
     patch_stop false
 
+    # NOTE: the gateway RMQ-HTTP "patch" is retired. The gateway's
+    # --RMQGameHostname is operator-managed from the k3s node external IP, and
+    # the old --RMQGameHttpPort=30196 arg was stale/unnecessary. After an update,
+    # verify the advertised IP instead:
+    #   dune-ctl --world <world> preflight   # "gateway IP" row
     echo ""
-    echo "=== Re-applying gateway RMQ HTTP port patch ==="
-    "$SCRIPT_DIR/gateway-patch.sh"
+    echo "=== Verify gateway advertised IP (operator-managed) ==="
+    echo "  dune-ctl --world <world> preflight   # check the 'gateway IP' row"
 else
-    echo ""
-    echo "=== Re-applying gateway RMQ HTTP port patch ==="
-    if ! "$SCRIPT_DIR/gateway-patch.sh"; then
-        echo "Gateway patch deferred; battlegroup may be stopped. Run gateway-patch.sh after starting." >&2
-    fi
-
     echo ""
     echo "Battlegroup remains stopped. Start when ready:"
     echo "  ~/dune-server/server/scripts/battlegroup.sh start"

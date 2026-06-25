@@ -144,8 +144,8 @@ newer k3s may already support cleaner approaches.
 | `root-setup.sh` | Run once as root: installs k3s, creates shims (incl. steamcmd wrapper), writes rc.k3s, sets sudoers, sets up LVM swap + backup volume |
 | `memory-focused-scheduler.sh` | Custom Kubernetes scheduler daemon — binds pending pods to the single k3s node. Auto-starts via rc.local |
 | `map-toggle.sh` | Start/stop individual maps; handles the full BattleGroup CR + ServerSetScale chain |
-| `update.sh` | Full update flow: steamcmd pre-fetch with `validate`, re-apply funcom patches, run Funcom update, re-apply gateway patch |
-| `gateway-patch.sh` | Apply `--RMQGameHttpPort=30196` (and current `--RMQGameHostname`) to gateway Deployment (idempotent; re-run after every restart) |
+| `update.sh` | Full update flow: steamcmd pre-fetch with `validate`, re-apply funcom patches, run Funcom update (gateway patch step retired 2026-06-02) |
+| `gateway-patch.sh` | **DEPRECATED no-op** (2026-06-02). The gateway `--RMQGameHostname` is operator-managed from the k3s `node-external-ip`; the old `--RMQGameHttpPort=30196` arg was stale/unnecessary. Verify with `dune-ctl preflight` (the "gateway IP" row) instead |
 | `security-audit.sh` | Check for accidental public exposure of sensitive services and NodePorts |
 | `db-credentials.sh` | Postgres credential guard; discovers the live DB port from the DatabaseDeployment/service and repairs drifted passwords |
 | `dune-backup.sh` | Host-side bundle: Funcom `DatabaseOperation` DB dump + Kubernetes metadata + UserSettings into `/srv/backups/dune/<env>/<battlegroup>/` |
@@ -178,6 +178,8 @@ use.
   `backup.rs`, `capsules.rs`, `public_ip.rs`, `fls.rs`, `health.rs`, etc.) and
   `dune-ctl/ctl/src/{cli,tui,web}/`
 - Full reference: `dune-ctl/OPERATIONS.md`
+- Sietch (instance) management design/plan: `dune-ctl/SIETCHES-DESIGN.md`
+  (matching Funcom's Battlegroup Editor `bg-util`; see `PLANETOLOGIST-TRAINER-BUG.md`)
 
 ### World targeting
 
@@ -227,15 +229,15 @@ dune-ctl logs <target> [-f] [--tail N]
 dune-ctl players
 dune-ctl backup list|run|restore --yes <timestamp>
 dune-ctl backup schedule [--show]                       # nightly 03:00 cron, keep 14
-dune-ctl --world Ixware gateway-patch
 dune-ctl --world Ixware public-ip show|check|set <ip>|apply-detected
 ```
 
 ### TUI
 
 Launching with no subcommand starts the TUI. Tabs: `1` Worlds, `2` Dashboard,
-`3` Maps, `4` Settings, `5` Logs, `6` Backups. Global keys: `Tab` cycles,
-`1`–`6` jump, `r` refresh, `q` quit. Tab `1` is the world/capsule selector —
+`3` Maps, `4` Settings, `5` Logs, `6` Backups, `7` Sietches (read-only capacity +
+list; mutate via the `sietches` CLI). Global keys: `Tab` cycles, `1`–`7` jump,
+`r` refresh, `q` quit. Tab `1` is the world/capsule selector —
 switching there retargets the rest of the TUI. Full keymap in
 `dune-ctl/OPERATIONS.md`.
 
@@ -289,14 +291,14 @@ Hardening applied 2026-05-14. Read this section before touching the firewall, SS
 firewalld 1.3.3 is installed and starts from `/etc/rc.d/rc.local`. **Must use `FirewallBackend=iptables`** — the nftables backend conflicts with k3s CNI (flannel) and corrupts pod networking. Set in `/etc/firewalld/firewalld.conf`.
 
 Two zones:
-- **`public`** (eth0): ssh, dune-game (UDP 7782-7790), dune-rmq (TCP 31982+30196), conan-exiles (UDP 7777-7778/14001/27015, TCP 25575/8088). Masquerade on.
+- **`public`** (eth0): ssh, dune-game (UDP 7782-7790), dune-rmq (TCP 31982 — RMQ game AMQP only; the dead `30196` was removed 2026-06-02 and the RMQ management HTTP port stays private), conan-exiles (UDP 7777-7778/14001/27015, TCP 25575/8088). Masquerade on.
 - **`trusted`** (target ACCEPT): sources 127.0.0.1/8, 192.168.254.0/24 (LAN), 10.42.0.0/16 (pod CIDR), 10.43.0.0/16 (service CIDR); interfaces cni0, flannel.1.
 
 Custom service XMLs live in `/etc/firewalld/services/`. **Zone XML files must begin with `<?xml` as the very first byte** — leading whitespace causes `INVALID_SERVICE: XML or text declaration not at start of entity`. Verify with `head -c1 /etc/firewalld/zones/public.xml | xxd -p` (must output `3c`).
 
 After editing XML files, run `sudo firewall-cmd --reload` and verify the generated iptables rules. If firewalld reports XML parsing errors or stale state persists, do a full stop+start: `sudo /etc/rc.d/rc.firewalld stop && sudo /etc/rc.d/rc.firewalld start`.
 
-Run `~/dune-server/scripts/security-audit.sh` when you want a quick host-side exposure check. It flags accidental public exposure of Director, Filebrowser, Postgres, the k3s API, and RabbitMQ admin ports. It also treats the intentionally public `mq-game-svc` ports (`31982` and `30196`) as expected.
+Run `~/dune-server/scripts/security-audit.sh` when you want a quick host-side exposure check. It flags accidental public exposure of Director, Filebrowser, Postgres, the k3s API, and RabbitMQ admin/management ports. It treats only the intentionally public `mq-game-svc` AMQP port (`31982`) as expected; the RMQ management HTTP port (15672) is now flagged as sensitive if exposed.
 
 ### SSH
 
@@ -315,7 +317,7 @@ Only `startux` and `dune` have authorized keys. Keys are RSA-4096 (defiant's Ope
 ### Update flow notes
 
 - `scripts/db-credentials.sh` discovers the live Postgres port from the DatabaseDeployment or service before checking credentials. The old `15432` assumption no longer matches the current operator revision.
-- `scripts/update.sh --post-update-only --start-after` is the resume path after a Funcom update has already completed. It now starts the battlegroup before reapplying the gateway patch, because the gateway deployment is recreated when the battlegroup comes back.
+- `scripts/update.sh --post-update-only --start-after` is the resume path after a Funcom update has already completed. It starts the battlegroup and then prints a reminder to verify the gateway's advertised IP via `dune-ctl preflight` (the gateway patch step was retired 2026-06-02).
 
 ### FLS JWT token
 
@@ -327,7 +329,7 @@ It appears 28 times (once per map set). **Current token expires 2027-05-19. Rota
 
 Check expiry at any time: `~/dune-server/dune-ctl/target/release/dune-ctl token-check`
 
-When rotating: get a new token from the Funcom portal, patch all 28 occurrences in the BattleGroup CR, then run `gateway-patch.sh`. Tracked in dune-ctl (`token-check` exits 2 when ≤14 days remain).
+When rotating: get a new token from the Funcom portal, patch all 28 occurrences in the BattleGroup CR, then restart the battlegroup. Tracked in dune-ctl (`token-check` exits 2 when ≤14 days remain).
 
 ### Public IP
 
@@ -346,8 +348,8 @@ dune-ctl --world <world> public-ip set <new-ip> --yes
 dune-ctl --world <world> public-ip apply-detected --yes
 ```
 
-Router forwards required: UDP 7782-7790, TCP 31982, TCP 30196. The host cannot
-verify router forwarding — check the TP-Link A7 UI. Full runbook in
+Router forwards required: UDP 7782-7790, TCP 31982 (RMQ game AMQP). The host
+cannot verify router forwarding — check the TP-Link A7 UI. Full runbook in
 `PUBLIC-IP.md`.
 
 ### Operator recovery after stuck state
@@ -357,7 +359,7 @@ If battlegroup gets stuck in `Stopped` after a restart:
 1. Check `MessageQueue` CRs: `sudo kubectl get messagequeues -n funcom-seabass-<bg>`. If any show `spec.suspend: True`, patch them false: `sudo kubectl patch messagequeue <name> -n <ns> --type=merge -p '{"spec":{"suspend":false}}'`
 2. If operators show `Error` status: `sudo kubectl rollout restart deployment -n funcom-operators` — let them stabilize (1-2 min) before checking battlegroup status.
 3. **Do not manually scale StatefulSets** owned by MessageQueue CRs. Manual scaling bypasses the operator's lifecycle state machine and leaves `status.phase` and `status.managementAddress` stuck, causing the battlegroup to remain Stopped even after pods appear.
-4. After operators recover, the battlegroup reconciles automatically. Then run `gateway-patch.sh`.
+4. After operators recover, the battlegroup reconciles automatically (including the gateway's advertised IP, which the operator derives from the k3s `node-external-ip`). Verify with `dune-ctl preflight` (the "gateway IP" row).
 
 ---
 
@@ -412,7 +414,7 @@ remain the underlying mechanism and the fallback when dune-ctl is unavailable.
 ~/dune-server/server/scripts/battlegroup.sh operator-logs-export
 ~/dune-server/server/scripts/battlegroup.sh apply-default-usersettings
 
-# Preferred update wrapper (adds backup, stop, patch re-apply, gateway patch)
+# Preferred update wrapper (adds backup, stop, funcom-patch re-apply)
 ~/dune-server/scripts/update.sh                                 # full pipeline
 ~/dune-server/scripts/update.sh --start-after                   # also start after
 ~/dune-server/scripts/update.sh --post-update-only --start-after  # resume after Funcom step
@@ -470,13 +472,15 @@ Then manually (or add to rc.local for fully automatic):
 sudo rc-service k3s start
 ```
 
-After k3s is up, start the world and reapply the gateway patch:
+After k3s is up, start the world and verify readiness:
 
 ```sh
 ~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware battlegroup start
-~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware gateway-patch
 ~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware preflight
 ```
+
+(No gateway patch step — the gateway advertised IP is operator-managed from the
+k3s `node-external-ip`; `preflight`'s "gateway IP" row confirms it.)
 
 Maps that were running before a reboot may not restart automatically in the
 same shape. Use `dune-ctl --world Ixware maps list` and explicitly start any

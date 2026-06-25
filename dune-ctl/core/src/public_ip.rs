@@ -12,7 +12,6 @@ use crate::{config::Config, kubectl};
 
 pub const HOST_IP_ENV: &str = "HOST_DATACENTER_IP_ADDRESS";
 pub const RMQ_HOST_PREFIX: &str = "--RMQGameHostname=";
-pub const RMQ_HTTP_ARG: &str = "--RMQGameHttpPort=30196";
 pub const DEFAULT_PROVIDERS: &[&str] = &[
     "https://api.ipify.org",
     "https://ifconfig.me/ip",
@@ -24,7 +23,6 @@ pub struct PublicIpSummary {
     pub local_ips: Vec<String>,
     pub live_ips: Vec<String>,
     pub gateway_hostname: Option<String>,
-    pub gateway_http_patched: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -169,8 +167,7 @@ pub async fn show(cfg: &Config) -> Result<PublicIpSummary> {
     Ok(PublicIpSummary {
         local_ips,
         live_ips,
-        gateway_hostname: gateway.as_ref().and_then(|state| state.hostname.clone()),
-        gateway_http_patched: gateway.map(|state| state.http_patched),
+        gateway_hostname: gateway.and_then(|state| state.hostname),
     })
 }
 
@@ -384,14 +381,6 @@ async fn patch_gateway_deployment(cfg: &Config, new_ip: &str) -> Result<()> {
         }));
     }
 
-    if !args.iter().any(|arg| arg.as_str() == Some(RMQ_HTTP_ARG)) {
-        patch.push(json!({
-            "op": "add",
-            "path": "/spec/template/spec/containers/0/args/-",
-            "value": RMQ_HTTP_ARG,
-        }));
-    }
-
     kubectl::run(&[
         "patch",
         "deployment",
@@ -421,7 +410,6 @@ async fn remove_last_applied(cfg: &Config) -> Result<()> {
 #[derive(Debug)]
 struct GatewayState {
     hostname: Option<String>,
-    http_patched: bool,
 }
 
 async fn gateway_state(cfg: &Config) -> Result<GatewayState> {
@@ -437,11 +425,7 @@ async fn gateway_state(cfg: &Config) -> Result<GatewayState> {
             .and_then(|value| value.strip_prefix(RMQ_HOST_PREFIX))
             .map(str::to_string)
     });
-    let http_patched = args.iter().any(|arg| arg.as_str() == Some(RMQ_HTTP_ARG));
-    Ok(GatewayState {
-        hostname,
-        http_patched,
-    })
+    Ok(GatewayState { hostname })
 }
 
 async fn gateway_rmq_hostname(cfg: &Config) -> Result<Option<String>> {

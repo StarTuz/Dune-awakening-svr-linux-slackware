@@ -52,7 +52,7 @@ Common paths for the native Slackware Dune: Awakening deployment.
 | Root bootstrap | `/home/dune/dune-server/scripts/root-setup.sh` |
 | Update pipeline | `/home/dune/dune-server/scripts/update.sh` |
 | DB credential guard | `/home/dune/dune-server/scripts/db-credentials.sh` |
-| Gateway patch | `/home/dune/dune-server/scripts/gateway-patch.sh` |
+| Gateway patch (DEPRECATED no-op) | `/home/dune/dune-server/scripts/gateway-patch.sh` |
 | Security exposure audit | `/home/dune/dune-server/scripts/security-audit.sh` |
 | Live system snapshot | `/home/dune/dune-server/scripts/system-snapshot.sh` |
 | Resource snapshot | `/home/dune/dune-server/scripts/resource-snapshot.sh` |

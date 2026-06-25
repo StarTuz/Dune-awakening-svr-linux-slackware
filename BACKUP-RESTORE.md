@@ -152,9 +152,9 @@ dune-ctl backup restore --yes <timestamp>
 # or by full path:
 dune-ctl backup restore --yes /srv/backups/dune/<environment>/<battlegroup>/<timestamp>
 
-# 4. Start and re-patch
+# 4. Start and verify
 dune-ctl battlegroup start
-dune-ctl gateway-patch
+dune-ctl preflight        # check the "gateway IP" row
 dune-ctl status
 ```
 
@@ -187,11 +187,11 @@ If `dune-ctl` is unavailable, the underlying steps are:
    ~/dune-server/server/scripts/battlegroup.sh import <backup>.backup
    ```
 
-4. Start and re-patch:
+4. Start and verify:
 
    ```sh
    ~/dune-server/server/scripts/battlegroup.sh start
-   ~/dune-server/scripts/gateway-patch.sh
+   dune-ctl preflight        # check the "gateway IP" row
    dune-ctl status
    ```
 
@@ -301,9 +301,10 @@ Live import rehearsal result:
 - Created Funcom import operation
   `sh-db3533a2d5a25fb-xyyxbx-import-20260519-042000`; it reached `Succeeded`.
 - Restarted the battlegroup and reapplied `--RMQGameHttpPort=30196` through
-  `dune-ctl gateway-patch`.
+  `dune-ctl gateway-patch` (historical — that gateway patch step was retired
+  2026-06-02; verify the gateway IP via `dune-ctl preflight` instead).
 - Final state: battlegroup `Healthy`, `Survival_1` and `Overmap` running,
-  diagnostics OK, gateway patch OK, no players online.
+  diagnostics OK, no players online.
 - Live DB sanity after import: 28 `world_partition` rows, 2 `farm_state` rows,
   1 account, 1 player row, 41 actors, 115 items. The player row decrypted as
   `Marinka`, status `Offline`, last login `2026-05-19 02:44:31.082799+00`.
@@ -368,7 +369,7 @@ separate k3s host/VM or with audited port changes.
 
    ```sh
    dune-ctl --world <target> battlegroup start
-   dune-ctl --world <target> gateway-patch
+   dune-ctl --world <target> preflight        # check the "gateway IP" row
    dune-ctl --world <target> status
    dune-ctl --world <target> settings status
    dune-ctl --world <target> players

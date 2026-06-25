@@ -5,7 +5,6 @@ use dune_ctl_core::{
     config::{Config, WorldProfile},
     diagnostics::CheckState,
     fls::FlsTokenState,
-    gateway,
     health::HealthSnapshot,
     logs, maintenance, maps, players, public_ip, settings, sietches, update,
 };
@@ -52,7 +51,7 @@ pub enum Command {
     },
     /// Run local deployment diagnostics
     Diagnostics,
-    /// Run full update pipeline (steamcmd + funcom-patches + gateway-patch)
+    /// Run full update pipeline (steamcmd + funcom-patches + capsule apply)
     Update,
     /// Cleanly stop the selected Dune world for planned host maintenance
     Shutdown {
@@ -66,8 +65,6 @@ pub enum Command {
         #[arg(long, default_value = "300")]
         timeout: u64,
     },
-    /// Re-apply --RMQGameHttpPort=30196 to the gateway Deployment
-    GatewayPatch,
     /// Check FLS token expiry; exits non-zero if critical or expired
     TokenCheck,
     /// Inspect or update the selected world's advertised public Internet IP
@@ -292,6 +289,75 @@ pub enum SietchesCommand {
     Stop,
     /// Restart the selected world's primary Sietch
     Restart,
+    /// Open the Battlegroup Editor (bg-util) to manage Sietches/dimensions, names, and memory
+    Edit {
+        /// Open the raw BattleGroup YAML in the default editor instead of bg-util
+        #[arg(long)]
+        advanced: bool,
+    },
+    /// Add a Sietch (provisions a world partition + raises the active count)
+    Add {
+        /// Unique display name for the new Sietch (recommended — avoids duplicate names)
+        #[arg(long)]
+        name: Option<String>,
+        /// Join password for the new Sietch (recommended for a private/test Sietch)
+        #[arg(long)]
+        password: Option<String>,
+        /// Apply without the confirmation gate
+        #[arg(long)]
+        yes: bool,
+        /// Show the CR patch without applying
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the automatic pre-change backup
+        #[arg(long)]
+        skip_backup: bool,
+    },
+    /// Remove a Sietch by world-partition id (refuses the primary/last Sietch)
+    Remove {
+        /// World-partition id of the Sietch to remove
+        partition_id: u32,
+        /// Apply without the confirmation gate
+        #[arg(long)]
+        yes: bool,
+        /// Show the CR patch without applying
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the automatic pre-change backup
+        #[arg(long)]
+        skip_backup: bool,
+    },
+    /// Set a Sietch's join password (by world-partition id)
+    Password {
+        /// World-partition id of the Sietch
+        partition_id: u32,
+        /// New join password (no ' or " characters)
+        password: String,
+        /// Apply without the confirmation gate
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Set the number of active Sietches (replicas) for the primary map
+    Scale {
+        /// Desired active Sietch count (must be <= existing world partitions)
+        count: u32,
+        /// Apply without the confirmation gate
+        #[arg(long)]
+        yes: bool,
+        /// Show the result without applying
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Set a Sietch's display name (by world-partition id; see the id from `add`)
+    Rename {
+        /// World-partition id of the Sietch to rename
+        partition_id: u32,
+        /// New display name (no ' or " characters)
+        name: String,
+        /// Apply without the confirmation gate
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -428,7 +494,6 @@ pub async fn run(cmd: Command, cfg: &Config) -> Result<()> {
             skip_backup,
             timeout,
         } => cmd_shutdown(cfg, yes, skip_backup, timeout).await,
-        Command::GatewayPatch => cmd_gateway_patch(cfg).await,
         Command::TokenCheck => cmd_token_check(cfg).await,
         Command::PublicIp { action } => cmd_public_ip(action, cfg).await,
         Command::Backup { action } => cmd_backup(action, cfg).await,
@@ -459,14 +524,6 @@ async fn cmd_public_ip(action: PublicIpCommand, cfg: &Config) -> Result<()> {
             println!(
                 "Gateway RMQ : {}",
                 summary.gateway_hostname.as_deref().unwrap_or("unavailable")
-            );
-            println!(
-                "RMQ HTTP    : {}",
-                match summary.gateway_http_patched {
-                    Some(true) => "patched",
-                    Some(false) => "missing",
-                    None => "unavailable",
-                }
             );
         }
         PublicIpCommand::Check { providers } => {
@@ -681,6 +738,24 @@ fn world_settings_dir(battlegroup: &str) -> std::path::PathBuf {
 async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
     match action {
         SietchesCommand::List => {
+            match sietches::capacity(cfg).await {
+                Ok(cap) => {
+                    println!(
+                        "Capacity: {} of {} Sietch(es) active for {} (max = enabled worldPartitions).",
+                        cap.active, cap.max, cap.map
+                    );
+                    if cap.max <= 1 {
+                        println!(
+                            "Single-Sietch world. Add a Sietch with `dune-ctl --world {} sietches edit` \
+                             (bg-util: raise worldPartitions, set active ≤ count, give it a unique name).",
+                            cfg.title.as_deref().unwrap_or(&cfg.battlegroup)
+                        );
+                    }
+                    println!();
+                }
+                Err(e) => eprintln!("warning: could not read Sietch capacity: {e}"),
+            }
+
             let snap = HealthSnapshot::collect(cfg).await?;
             println!(
                 "{:<18} {:<14} {:<12} {:<8} {:<8} {:<6} State",
@@ -733,8 +808,188 @@ async fn cmd_sietches(action: SietchesCommand, cfg: &Config) -> Result<()> {
             print_target_summary(cfg);
             println!("Follow-up   : verify gateway patch and server browser after rollout.");
         }
+        SietchesCommand::Edit { advanced } => {
+            if advanced {
+                println!(
+                    "Opening raw BattleGroup YAML for {} (default editor). Save and exit to apply.",
+                    selected_world_label(cfg)
+                );
+            } else {
+                println!(
+                    "Opening Battlegroup Editor (bg-util) for {}. Edit dimensions/Sietches, names, and memory; save and exit to apply.",
+                    selected_world_label(cfg)
+                );
+            }
+            sietches::edit(cfg, advanced).await?;
+        }
+        SietchesCommand::Add {
+            name,
+            password,
+            yes,
+            dry_run,
+            skip_backup,
+        } => {
+            if dry_run {
+                let (plan, patch) =
+                    sietches::add(cfg, name.as_deref(), password.as_deref(), true).await?;
+                println!(
+                    "Dry run — would add a Sietch to {} (active {} -> {}):",
+                    plan.map,
+                    plan.new_replicas - 1,
+                    plan.new_replicas
+                );
+                println!(
+                    "  new world partition: id={} dimension={} grid bounds x[{}..{}] y[{}..{}]",
+                    plan.new_partition_id,
+                    plan.new_dimension,
+                    plan.min_x,
+                    plan.max_x,
+                    plan.min_y,
+                    plan.max_y
+                );
+                println!("CR patch:\n{patch}");
+                return Ok(());
+            }
+            if !yes {
+                anyhow::bail!(
+                    "refusing to add a Sietch without --yes; rerun with --dry-run to inspect the CR patch first"
+                );
+            }
+            if !skip_backup {
+                println!("Backing up before adding a Sietch...");
+                backup::run(cfg, false, None).await?;
+            }
+            let (plan, _) =
+                sietches::add(cfg, name.as_deref(), password.as_deref(), false).await?;
+            println!(
+                "Added Sietch to {}: world partition id={} (dimension {}); active Sietches now {}.",
+                plan.map, plan.new_partition_id, plan.new_dimension, plan.new_replicas
+            );
+            match &name {
+                Some(n) => println!("Display name: {n:?} (partition id {}).", plan.new_partition_id),
+                None => println!(
+                    "No --name given: this Sietch shares the world's display name. \
+                     Set one with `sietches rename {} <name>`.",
+                    plan.new_partition_id
+                ),
+            }
+            if password.is_none() {
+                println!(
+                    "No --password given: this Sietch is PUBLIC and may appear in the server \
+                     browser. Lock it with `sietches password {} <pw>` if it should be private.",
+                    plan.new_partition_id
+                );
+            }
+            println!(
+                "Each Sietch needs ~5 Gi RAM — verify headroom and that the new instance reaches Running."
+            );
+            warn_capsule_live_only(cfg);
+            print_target_summary(cfg);
+        }
+        SietchesCommand::Remove {
+            partition_id,
+            yes,
+            dry_run,
+            skip_backup,
+        } => {
+            if dry_run {
+                let (plan, patch) = sietches::remove(cfg, partition_id, true).await?;
+                println!(
+                    "Dry run — would remove Sietch (partition id {}, dimension {}) from {}; \
+                     active Sietches -> {}:",
+                    plan.partition_id, plan.dimension, plan.map, plan.remaining_replicas
+                );
+                println!("CR patch:\n{patch}");
+                return Ok(());
+            }
+            if !yes {
+                anyhow::bail!(
+                    "refusing to remove a Sietch without --yes; rerun with --dry-run to inspect the CR patch first"
+                );
+            }
+            if !skip_backup {
+                println!("Backing up before removing a Sietch...");
+                backup::run(cfg, false, None).await?;
+            }
+            let (plan, _) = sietches::remove(cfg, partition_id, false).await?;
+            println!(
+                "Removed Sietch (partition id {}) from {}; active Sietches now {}.",
+                plan.partition_id, plan.map, plan.remaining_replicas
+            );
+            warn_capsule_live_only(cfg);
+            print_target_summary(cfg);
+        }
+        SietchesCommand::Password {
+            partition_id,
+            password,
+            yes,
+        } => {
+            if !yes {
+                anyhow::bail!("refusing to set a Sietch password without --yes");
+            }
+            sietches::set_password(cfg, partition_id, &password).await?;
+            println!("Join password set for Sietch (partition id {partition_id}).");
+            warn_capsule_live_only(cfg);
+            print_target_summary(cfg);
+        }
+        SietchesCommand::Scale {
+            count,
+            yes,
+            dry_run,
+        } => {
+            if dry_run {
+                let cap = sietches::scale(cfg, count, true).await?;
+                println!(
+                    "Dry run — would set active Sietches to {} (max {}) for {}.",
+                    cap.active, cap.max, cap.map
+                );
+                return Ok(());
+            }
+            if !yes {
+                anyhow::bail!(
+                    "refusing to scale Sietches without --yes; rerun with --dry-run to inspect only"
+                );
+            }
+            let cap = sietches::scale(cfg, count, false).await?;
+            println!(
+                "Active Sietches set to {} (max {}) for {}.",
+                cap.active, cap.max, cap.map
+            );
+            warn_capsule_live_only(cfg);
+            print_target_summary(cfg);
+        }
+        SietchesCommand::Rename {
+            partition_id,
+            name,
+            yes,
+        } => {
+            if !yes {
+                anyhow::bail!("refusing to rename Sietch without --yes");
+            }
+            sietches::rename(cfg, partition_id, &name).await?;
+            println!(
+                "Sietch (partition id {}) display name set to {:?}.",
+                partition_id, name
+            );
+            warn_capsule_live_only(cfg);
+            print_target_summary(cfg);
+        }
     }
     Ok(())
+}
+
+/// After a live Sietch-topology change, remind that capsule-backed worlds won't
+/// keep it across a cold-swap unless mirrored into the capsule source.
+fn warn_capsule_live_only(cfg: &Config) {
+    if cfg.has_capsule() {
+        println!(
+            "Note: this is a LIVE-only change. To keep it across a capsule cold-swap, mirror it \
+             into the capsule with:\n  KUBE_EDITOR=~/.dune/bin/bg-util  (edit) {}/battlegroup.yaml\n  \
+             i.e. `bg-util -f {}/battlegroup.yaml` and make the same edit.",
+            cfg.capsule_dir().display(),
+            cfg.capsule_dir().display()
+        );
+    }
 }
 
 fn selected_world_label(cfg: &Config) -> String {
@@ -1020,13 +1275,13 @@ async fn cmd_diagnostics(cfg: &Config) -> Result<()> {
     print_check("k3s API", &diagnostics.k3s_api);
     print_check("firewall backend", &diagnostics.firewall_backend);
     if diagnostics.k3s_api.state == CheckState::Ok {
-        match gateway::status(cfg).await {
+        match dune_ctl_core::gateway::status(cfg).await {
             Ok(gw) => println!(
                 "{:<22} {}",
-                "gateway patch",
-                if gw.patched { "ok" } else { "missing" }
+                "gateway RMQ host",
+                gw.hostname.as_deref().unwrap_or("not set")
             ),
-            Err(e) => println!("{:<22} unavailable {}", "gateway patch", e),
+            Err(e) => println!("{:<22} unavailable {}", "gateway RMQ host", e),
         }
     }
     Ok(())
@@ -1142,12 +1397,32 @@ async fn cmd_preflight(cfg: &Config, strict: bool) -> Result<()> {
 
     let snap = HealthSnapshot::collect(cfg).await?;
 
-    rows.push(match &snap.gateway {
-        Some(gateway) if gateway.patched => {
-            PreflightRow::ok("gateway patch", "--RMQGameHttpPort=30196 present")
+    // The gateway advertises --RMQGameHostname to FLS; the operator derives it
+    // from the k3s node external IP. If it drifts from the configured public IP
+    // (e.g. node-external-ip was not updated after a rotation), clients get a
+    // dead RMQ address. This replaces the retired "--RMQGameHttpPort patch" row.
+    rows.push(match public_ip::show(cfg).await {
+        Ok(summary) => {
+            let configured: Vec<&String> =
+                summary.live_ips.iter().chain(summary.local_ips.iter()).collect();
+            match &summary.gateway_hostname {
+                Some(host) if configured.iter().any(|ip| ip.as_str() == host) => {
+                    PreflightRow::ok("gateway IP", format!("advertises {host} (matches configured)"))
+                }
+                Some(host) => PreflightRow::fail(
+                    "gateway IP",
+                    format!(
+                        "advertises {host}; configured {} — fix k3s node-external-ip (see PUBLIC-IP.md)",
+                        configured
+                            .first()
+                            .map(|s| s.as_str())
+                            .unwrap_or("unknown")
+                    ),
+                ),
+                None => PreflightRow::warn("gateway IP", "gateway --RMQGameHostname not found"),
+            }
         }
-        Some(_) => PreflightRow::fail("gateway patch", "--RMQGameHttpPort=30196 missing"),
-        None => PreflightRow::warn("gateway patch", "gateway deployment status unavailable"),
+        Err(_) => PreflightRow::warn("gateway IP", "gateway/public-ip status unavailable"),
     });
 
     rows.push(match &snap.fls {
@@ -1380,12 +1655,8 @@ async fn cmd_status(cfg: &Config) -> Result<()> {
     println!("Start       : {}", start_summary(&snap));
     if let Some(gateway) = &snap.gateway {
         println!(
-            "Gateway     : {} ready {}/{}",
-            if gateway.patched {
-                "patched"
-            } else {
-                "missing RMQ HTTP patch"
-            },
+            "Gateway     : RMQ host {} ready {}/{}",
+            gateway.hostname.as_deref().unwrap_or("—"),
             opt_u32(gateway.ready_replicas),
             opt_u32(gateway.updated_replicas)
         );
@@ -1609,15 +1880,6 @@ async fn cmd_shutdown(cfg: &Config, yes: bool, skip_backup: bool, timeout: u64) 
         println!("{}", line);
     }
     task.await??;
-    Ok(())
-}
-
-async fn cmd_gateway_patch(cfg: &Config) -> Result<()> {
-    match gateway::patch(cfg).await? {
-        true => println!("gateway: --RMQGameHttpPort=30196 applied."),
-        false => println!("gateway: already patched, nothing to do."),
-    }
-    print_target_summary(cfg);
     Ok(())
 }
 

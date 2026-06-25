@@ -40,21 +40,23 @@ Probable mechanism: FLS rejects outdated builds from the browser to prevent play
 
 ### What was found and fixed
 
-**`GameRmqHttpAddress: "47.145.31.211:None"` (fixed 2026-05-14)**
+> **Superseded 2026-06-02 — the `--RMQGameHttpPort=30196` patch below is RETIRED.**
+> `GameRmqHttpAddress` (the RMQ management API) is off the gameplay path, and the
+> server became browser-visible from the build version bump, not this patch. The
+> hardcoded `30196` was also stale (the live RMQ management NodePort is dynamic).
+> The recurring `--RMQGameHostname` drift that `gateway-patch.sh` also masked was
+> root-caused to a stale k3s `node-external-ip` and fixed durably (the operator
+> derives the gateway hostname from the Node ExternalIP). The text below is kept
+> as history. See the "What still needs doing" and bootstrapping notes for the
+> retirement, and `PUBLIC-IP.md` for the node-external-ip runbook.
 
-The gateway's Python service discovers RabbitMQ NodePorts via the Kubernetes API. It successfully found the `amqp` port (NodePort 31982) but not the `http` port (NodePort 30196) because the port name in the service doesn't match what the code expects. This caused every `GatewayDeclareFarmStatus` FLS call to send `GameRmqHttpAddress: "47.145.31.211:None"`.
+**`GameRmqHttpAddress: "47.145.31.211:None"` (fixed 2026-05-14; retired 2026-06-02)**
 
-Fix: added `--RMQGameHttpPort=30196` to the gateway Deployment args via JSON patch. The gateway now sends `GameRmqHttpAddress: "47.145.31.211:30196"` correctly.
+The gateway's Python service discovers RabbitMQ NodePorts via the Kubernetes API. It successfully found the `amqp` port (NodePort 31982) but not the `http` port because the port name in the service doesn't match what the code expects. This caused every `GatewayDeclareFarmStatus` FLS call to send `GameRmqHttpAddress: "47.145.31.211:None"`.
 
-**Caveat**: this patch is applied to the Deployment directly. The server-operator regenerates the gateway Deployment from the BattleGroup CR on every restart or update, wiping the patch. Scripts exist to re-apply it:
+Fix (now retired): added `--RMQGameHttpPort=30196` to the gateway Deployment args via JSON patch. This was later determined to be unnecessary (off the gameplay path) and stale (30196 is not the live management NodePort).
 
-```sh
-# After any battlegroup restart:
-~/dune-server/scripts/gateway-patch.sh
-
-# For updates (does update + patch in one step):
-~/dune-server/scripts/update.sh
-```
+**Caveat (historical)**: this patch was applied to the Deployment directly, and the server-operator regenerates the gateway Deployment on every restart/update, wiping it — which is why it "needed" re-applying. That recurrence was actually the operator re-stamping the host IP; the real fix was `node-external-ip`.
 
 ### Confirmed correct (do not re-investigate)
 
@@ -63,8 +65,8 @@ Fix: added `--RMQGameHttpPort=30196` to the gateway Deployment args via JSON pat
 | Router port forwarding UDP 7782-7790 | ✅ confirmed in place |
 | Router port forwarding TCP 31982 (RMQ AMQP NodePort) | ✅ confirmed in place |
 | `DatacenterId` / `-FarmRegion=` / director env var all set to `"North America Test"` | ✅ |
-| `GameRmqAddress: "47.145.31.211:31982"` | ✅ |
-| `GameRmqHttpAddress: "47.145.31.211:30196"` | ✅ (fixed 2026-05-14) |
+| `GameRmqAddress: "47.145.31.211:31982"` | ✅ (operator-set from node-external-ip) |
+| `GameRmqHttpAddress` | n/a — patch retired 2026-06-02 (off gameplay path) |
 | Survival_1 declared to FLS (`DeclareBattlegroupUpdates` with UpDeclarations, partition 1) | ✅ |
 | 8-hour heartbeat firing (`HeartbeatUpdatesByPartitionId`) | ✅ (confirmed 13:46 UTC 2026-05-14) |
 
@@ -88,13 +90,16 @@ Use the clean Dune shutdown command before rebooting the host:
 
 This takes a full backup, patches the BattleGroup to stopped, then waits for
 game servers to stop. It does not reboot the host. After boot, start the world
-and reapply the gateway patch:
+and verify readiness:
 
 ```sh
 ~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware battlegroup start
-~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware gateway-patch
 ~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware preflight
 ```
+
+(The gateway patch step is retired — the gateway's advertised IP is
+operator-managed from the k3s `node-external-ip`; `preflight`'s "gateway IP" row
+confirms it.)
 
 The TUI Dashboard exposes the same workflow on `Q` with confirmation.
 
@@ -124,9 +129,9 @@ The TUI Dashboard exposes the same workflow on `Q` with confirmation.
 #      because Funcom setup/system.sh uses non-idempotent `ln -s`)
 #   6. funcom-patches.sh again  (guards against battlegroup.sh update overwrites)
 #   7. db-credentials.sh check/fix  (guards against Postgres password drift)
-#   8. If --start-after, start the BattleGroup, then gateway-patch.sh waits
-#      for the gateway Deployment and restores --RMQGameHttpPort=30196 if it
-#      was wiped)
+#   8. If --start-after, start the BattleGroup, then print a reminder to verify
+#      the gateway's advertised IP (`dune-ctl preflight`, "gateway IP" row). The
+#      old gateway-patch step is retired — see the 2026-06-02 note below.)
 ```
 
 By default the wrapper leaves the battlegroup stopped after a successful update.
@@ -176,7 +181,7 @@ Overmap's *request* is 200 Mi (swap mode) but actual RSS is ~165 Mi. Survival_1 
 
 For dedicated-scaled maps, `ServerSetScale.spec.partitions` must also be patched on start. If `ServerSet` has `partitions: [3]` but `ServerSetScale` has `replicas: 1` and no `partitions`, the operator can create the right map with the wrong dynamic pod/partition path. This caused the 2026-05-17 social hub regression: Arrakeen/Harko started as `pod-0` or stayed in startup until the start tooling was fixed to patch both `replicas` and `partitions`.
 
-After a k3s restart, maps do not come back automatically — use `map-toggle.sh start` or `battlegroup.sh restart` (followed by `gateway-patch.sh`).
+After a k3s restart, maps do not come back automatically — use `map-toggle.sh start` or `battlegroup.sh restart`. (No gateway patch needed; the gateway IP is operator-managed from `node-external-ip`.)
 
 **Map persistence (auto-restart across reboots).** Start/stop (replicas) is a
 separate layer from the director's per-map `MinServers` in `director.ini`. With
@@ -196,10 +201,13 @@ VPA 1.6.0 recommender deployed 2026-05-13. Off mode — recommendations only, no
 
 **Standard workloads** (9 VPA objects): postgres, rabbitmq, gateway, director, text-router, filebrowser, db-util-mon, db-util-pghero, bgd-deploy. Recommendations populate after ~24h.
 
-VPA objects were created against the PTC namespace. Re-run
-`scripts/vpa/vpa-objects.sh` to create the equivalent Off-mode objects under
-the active Live namespace `funcom-seabass-sh-db3533a2d5a25fb-silakw` when
-recommendations on the live workloads are wanted.
+The 9 Off-mode VPA objects were (re)created under the active Live namespace
+`funcom-seabass-sh-db3533a2d5a25fb-silakw` on 2026-05-29 via
+`scripts/vpa/vpa-objects.sh` (the PTC-namespace objects were lost in the
+cold-swap). All show `MODE=Off`; `MEM` recommendations populate ~24h after
+creation (the recommender builds its histogram from object-creation time, not
+from host uptime), so expect values from 2026-05-30 onward. Re-run the script
+anytime — it is idempotent.
 
 ```sh
 sudo kubectl get vpa -n funcom-seabass-sh-db3533a2d5a25fb-silakw
@@ -342,7 +350,7 @@ Both `scripts/map-toggle.sh` and `dune-ctl/core/src/maps.rs` were updated so `st
 
 - [x] ~~Server browser visibility~~ — resolved 2026-05-14, "Slackware-Arrakis" visible in EXPERIMENTAL list
 - [x] ~~Security hardening~~ — resolved 2026-05-14; see above
-- [ ] Re-apply gateway patch after every restart: `~/dune-server/scripts/gateway-patch.sh`
+- [x] ~~Re-apply gateway patch after every restart~~ — **retired 2026-06-02**. Root cause of the recurring need was a stale k3s `node-external-ip` (operator re-stamps the gateway `--RMQGameHostname` from it); fixed durably in `/etc/rancher/k3s/config.yaml`. `gateway-patch.sh` is now a deprecated no-op. Verify the gateway IP with `dune-ctl preflight` ("gateway IP" row).
 - [ ] Confirm motherboard swap outcome (64 GB recognised?) — reboot and verify with `free -h`
 - [ ] After board swap: raise Overmap request back to its natural limit (remove 200 Mi swap patch via `experimental_swap.sh`)
 - [x] Add and verify Dune backup/restore runbook and host backup wrapper — full DB backup succeeded 2026-05-15; see `BACKUP-RESTORE.md` and `scripts/dune-backup.sh`
@@ -351,7 +359,7 @@ Both `scripts/map-toggle.sh` and `dune-ctl/core/src/maps.rs` were updated so `st
 - [ ] Off-server backup strategy (rsync to NAS / rclone to cloud — TBD)
 - [ ] Create `settings.conf` (`printf '\n\n\n47.145.31.211\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
 - [ ] **Rotate FLS token before 2027-04-19** (expires 2027-05-19) — update BattleGroup CR args (28 occurrences) + re-apply gateway patch
-- [ ] **Set sietch password before official launch** — no password is set (fine for PTC; FLS browser not widely used yet). At official release the server is publicly visible to all players. Set with `dune-ctl settings set sietch_password <password> && dune-ctl settings apply` before going live on the official world.
+- [x] **Set sietch password before official launch** — set 2026-05-29 on the Live world `Ixware` (`Bgd.ServerLoginPassword` present in `~/.dune/worlds/sh-db3533a2d5a25fb-silakw/UserSettings/UserEngine.ini`, deployed, no settings drift). The server is password-protected in the public FLS browser. Change later with `dune-ctl settings set sietch_password <password> && dune-ctl settings apply`.
 - [x] dune-ctl operational polish — world targeting, primary Sietch lifecycle,
   settings drift guard, per-world settings profile, and TUI settings polish are
   in place
@@ -378,7 +386,7 @@ The Funcom scripts assume a cloud-provisioned base — these were done manually:
 - **memory-focused-scheduler** — host daemon deployed; auto-starts via `/etc/rc.d/rc.local`
 - **root-setup.sh** ✅ ran 2026-05-13 — k3s shims, rc.k3s, sudoers, LVM swap + backup volume
 - **experimental_swap.sh** ✅ ran 2026-05-13 — swap enabled, all map memory requests patched down
-- **gateway `--RMQGameHttpPort=30196`** ✅ fixed 2026-05-14 — see `gateway-patch.sh`
+- **gateway `--RMQGameHttpPort=30196`** ❌ **retired 2026-06-02** — the arg was unnecessary (`GameRmqHttpAddress`/RMQ management is off the gameplay path) and stale (the live RMQ management NodePort is dynamic, not 30196). The recurring `--RMQGameHostname` drift it also touched was root-caused to a stale k3s `node-external-ip` and fixed durably. `gateway-patch.sh` is now a deprecated no-op.
 
 ## Storage (as of 2026-05-13)
 
@@ -411,11 +419,10 @@ Then manually:
 sudo rc-service k3s start
 ```
 
-After k3s is up, start the world and re-apply the gateway patch:
+After k3s is up, start the world and verify readiness:
 
 ```sh
 ~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware battlegroup start
-~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware gateway-patch
 ~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware preflight
 ```
 
@@ -429,8 +436,8 @@ Then check maps and explicitly start any on-demand travel maps that are needed.
 | Funcom scripts | `~/dune-server/server/scripts/` |
 | Our scripts | `~/dune-server/scripts/` |
 | Battlegroup mgmt | `~/dune-server/server/scripts/battlegroup.sh` |
-| Update (with gateway patch) | `~/dune-server/scripts/update.sh` |
-| Gateway patch (post-restart) | `~/dune-server/scripts/gateway-patch.sh` |
+| Update | `~/dune-server/scripts/update.sh` |
+| Gateway patch (DEPRECATED no-op) | `~/dune-server/scripts/gateway-patch.sh` |
 | Map toggle | `~/dune-server/scripts/map-toggle.sh` |
 | Scheduler daemon | `~/dune-server/scripts/memory-focused-scheduler.sh` |
 | Scheduler log | `~/dune-server/logs/memory-focused-scheduler.log` |

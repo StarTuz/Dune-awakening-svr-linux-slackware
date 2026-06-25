@@ -6,7 +6,6 @@ use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use dune_ctl_core::{
     backup,
     config::{Config, WorldProfile},
-    gateway,
     health::HealthSnapshot,
     logs, maintenance, maps, settings, sietches, update,
 };
@@ -64,6 +63,7 @@ pub enum View {
     Settings,
     Logs,
     Backups,
+    Sietches,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -583,7 +583,7 @@ async fn finish_update_task(app: &mut App) {
     match task.await {
         Ok(Ok(())) => {
             app.push_log("update complete");
-            app.push_log("follow-up: verify gateway patch and server browser");
+            app.push_log("follow-up: verify gateway IP and server browser");
             app.worlds = Config::discover_worlds().unwrap_or_default();
             start_refresh(app);
         }
@@ -668,7 +668,8 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                     View::Maps => View::Settings,
                     View::Settings => View::Logs,
                     View::Logs => View::Backups,
-                    View::Backups => View::Worlds,
+                    View::Backups => View::Sietches,
+                    View::Sietches => View::Worlds,
                 };
             }
             KeyCode::Char('1') => app.view = View::Worlds,
@@ -677,6 +678,7 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
             KeyCode::Char('4') => app.view = View::Settings,
             KeyCode::Char('5') => app.view = View::Logs,
             KeyCode::Char('6') => app.view = View::Backups,
+            KeyCode::Char('7') => app.view = View::Sietches,
             KeyCode::Char('r') => {
                 app.push_log("refreshing...");
                 refresh_world_context(app);
@@ -702,7 +704,8 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                 View::Maps => View::Settings,
                 View::Settings => View::Logs,
                 View::Logs => View::Backups,
-                View::Backups => View::Worlds,
+                View::Backups => View::Sietches,
+                View::Sietches => View::Worlds,
             };
             if app.view == View::Logs {
                 start_logs_refresh(app);
@@ -730,6 +733,9 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('6') => {
             app.view = View::Backups;
             start_backup_list_refresh(app);
+        }
+        KeyCode::Char('7') => {
+            app.view = View::Sietches;
         }
         KeyCode::Char('A') => {
             app.pending = Some(PendingAction::StartSietch);
@@ -895,20 +901,6 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
                     }
                     Err(e) => app.push_log(format!("stop error: {:#}", e)),
                 }
-            }
-        }
-        KeyCode::Char('g') => {
-            app.push_log("applying gateway patch...");
-            match gateway::patch(&app.cfg).await {
-                Ok(true) => {
-                    app.push_log("gateway: --RMQGameHttpPort=30196 applied");
-                    app.push_target_log();
-                }
-                Ok(false) => {
-                    app.push_log("gateway: already patched");
-                    app.push_target_log();
-                }
-                Err(e) => app.push_log(format!("gateway patch error: {:#}", e)),
             }
         }
         KeyCode::Char('r') => {

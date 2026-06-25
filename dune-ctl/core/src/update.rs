@@ -3,7 +3,7 @@ use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-use crate::{backup, battlegroup, config::Config, gateway, health::HealthSnapshot};
+use crate::{backup, battlegroup, config::Config, health::HealthSnapshot};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UpdateOptions {
@@ -11,7 +11,7 @@ pub struct UpdateOptions {
 }
 
 /// Run the full update pipeline via scripts/update.sh:
-///   steamcmd validate → funcom-patches → battlegroup update → gateway patch
+///   steamcmd validate → funcom-patches → battlegroup update → start → wait ready
 ///
 /// Returns combined stdout+stderr for display.
 pub async fn run(cfg: &Config) -> Result<String> {
@@ -164,13 +164,10 @@ async fn run_live_capsule_streamed(
     )
     .await?;
 
-    send(&tx, "step 7/9: start battlegroup");
+    send(&tx, "step 7/8: start battlegroup");
     battlegroup::start(cfg).await?;
 
-    send(&tx, "step 8/9: apply gateway patch");
-    patch_gateway_with_retry(cfg, tx.clone()).await?;
-
-    send(&tx, "step 9/9: wait for preflight-ready state");
+    send(&tx, "step 8/8: wait for preflight-ready state");
     wait_ready(cfg, tx.clone()).await?;
 
     send(&tx, "live capsule update complete");
@@ -225,49 +222,20 @@ async fn stream_command(
     Ok(())
 }
 
-async fn patch_gateway_with_retry(
-    cfg: &Config,
-    tx: tokio::sync::mpsc::UnboundedSender<String>,
-) -> Result<()> {
-    let mut last_error = None;
-    for attempt in 1..=24 {
-        match gateway::patch(cfg).await {
-            Ok(true) => {
-                send(&tx, "gateway patch applied");
-                return Ok(());
-            }
-            Ok(false) => {
-                send(&tx, "gateway patch already present");
-                return Ok(());
-            }
-            Err(e) => {
-                last_error = Some(e);
-                send(
-                    &tx,
-                    format!("gateway patch waiting for deployment ({attempt}/24)"),
-                );
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            }
-        }
-    }
-    Err(last_error
-        .unwrap_or_else(|| anyhow::anyhow!("gateway patch failed"))
-        .context("gateway patch did not become available"))
-}
-
 async fn wait_ready(cfg: &Config, tx: tokio::sync::mpsc::UnboundedSender<String>) -> Result<()> {
     for attempt in 1..=60 {
         if let Ok(snap) = HealthSnapshot::collect(cfg).await {
-            let gateway_ok = snap.gateway.as_ref().map(|gw| gw.patched).unwrap_or(false);
+            let gateway_ok = snap
+                .gateway
+                .as_ref()
+                .map(|gw| gw.ready_replicas.unwrap_or(0) >= 1)
+                .unwrap_or(false);
             let sietch_ok = snap.sietches.iter().any(|s| {
                 s.primary
                     && s.phase == "Running"
                     && s.ready_replicas.unwrap_or(0) >= 1
                     && s.target_replicas.unwrap_or(1) >= 1
             });
-            if !gateway_ok {
-                let _ = gateway::patch(cfg).await;
-            }
             if !snap.battlegroup_stopped
                 && snap.battlegroup_phase == "Healthy"
                 && gateway_ok
@@ -279,7 +247,7 @@ async fn wait_ready(cfg: &Config, tx: tokio::sync::mpsc::UnboundedSender<String>
             send(
                 &tx,
                 format!(
-                    "waiting: phase={} stopped={} gateway={} primary_sietch={} ({attempt}/60)",
+                    "waiting: phase={} stopped={} gateway_ready={} primary_sietch={} ({attempt}/60)",
                     snap.battlegroup_phase, snap.battlegroup_stopped, gateway_ok, sietch_ok
                 ),
             );

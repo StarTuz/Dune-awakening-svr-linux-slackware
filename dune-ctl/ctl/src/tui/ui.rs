@@ -61,6 +61,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         View::Settings => draw_settings_view(f, app, chunks[2]),
         View::Logs => draw_logs_view(f, app, chunks[2]),
         View::Backups => draw_backups_view(f, app, chunks[2]),
+        View::Sietches => draw_sietches_view(f, app, chunks[2]),
     }
     draw_log(f, app, chunks[3]);
     draw_hints(f, app, chunks[4]);
@@ -204,6 +205,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         View::Settings => 3,
         View::Logs => 4,
         View::Backups => 5,
+        View::Sietches => 6,
     };
     let titles = [
         "1 Worlds",
@@ -212,6 +214,7 @@ fn draw_tabs(f: &mut Frame, app: &App, area: Rect) {
         "4 Settings",
         "5 Logs",
         "6 Backups",
+        "7 Sietches",
     ];
     f.render_widget(
         Tabs::new(titles)
@@ -402,6 +405,50 @@ fn draw_sietches_panel(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(table, area);
 }
 
+fn draw_sietches_view(f: &mut Frame, app: &App, area: Rect) {
+    let snap = app.snapshot.as_ref();
+    let primary = snap.and_then(|s| {
+        s.sietches
+            .iter()
+            .find(|x| x.primary)
+            .or_else(|| s.sietches.first())
+    });
+    let active = primary.map(|s| s.replicas).unwrap_or(0);
+    let slots = primary.map(|s| s.partitions.len()).unwrap_or(0);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(6), Constraint::Min(0)])
+        .split(area);
+
+    let mut lines = Vec::new();
+    if slots > 0 {
+        lines.push(Line::from(format!(
+            "Active Sietches: {active} / {slots} partition slot(s)"
+        )));
+    } else {
+        lines.push(Line::from(format!("Active Sietches: {active}")));
+    }
+    if slots <= 1 {
+        lines.push(
+            Line::from(
+                "Single-Sietch world (the quest-recovery 'switch Sietch' path needs >= 2).",
+            )
+            .style(Style::default().fg(Color::DarkGray)),
+        );
+    }
+    lines.push(Line::from(""));
+    lines.push(
+        Line::from(
+            "Manage via CLI: sietches add [--name N --password P] | scale <N> | remove <id> | rename <id> N | password <id> P | edit",
+        )
+        .style(Style::default().fg(Color::DarkGray)),
+    );
+    f.render_widget(panel("Sietch capacity", lines), chunks[0]);
+
+    draw_sietches_panel(f, app, chunks[1]);
+}
+
 fn sietch_display_name(app: &App, snap: Option<&HealthSnapshot>) -> Option<String> {
     let configured = app
         .settings
@@ -506,13 +553,16 @@ fn draw_overview(f: &mut Frame, snap: Option<&HealthSnapshot>, area: Rect) {
 fn draw_gateway_panel(f: &mut Frame, snap: Option<&HealthSnapshot>, area: Rect) {
     let lines = if let Some(gw) = snap.and_then(|s| s.gateway.as_ref()) {
         vec![
-            Line::from(vec![Span::raw("RMQ HTTP patch: "), bool_span(gw.patched)]),
+            Line::from(format!(
+                "RMQ hostname: {}",
+                gw.hostname.as_deref().unwrap_or("—")
+            )),
             Line::from(format!(
                 "Ready replicas: {}   Updated: {}",
                 opt_u32(gw.ready_replicas),
                 opt_u32(gw.updated_replicas)
             )),
-            Line::from("Expected GameRmqHttpAddress: 47.145.31.211:30196"),
+            Line::from("Hostname is operator-managed (k3s node-external-ip)."),
         ]
     } else {
         vec![Line::from("Gateway deployment status unavailable.")]
@@ -839,7 +889,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
     let hint = match app.view {
         View::Worlds => "[↑/↓] select world  [I] init profile  [r] refresh  [q] quit",
         View::Dashboard => {
-            "[A] start world  [Z] stop world  [R] restart  [Q] clean shutdown  [u] update  [g] gateway  [r] refresh"
+            "[A] start world  [Z] stop world  [R] restart  [Q] clean shutdown  [u] update  [r] refresh"
         }
         View::Maps => "[Tab/4] settings  [s/x] map start/stop  [r] refresh  [q] quit",
         View::Settings => {
@@ -850,10 +900,13 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
             if app.backup_task.is_some() {
                 "[backup running...]  [q] quit"
             } else if !app.backup_entries.is_empty() {
-                "[↑/↓] select  [r] run  [d] delete  [e] cron  [K] keep  [X] rm schedule  [Tab/1] worlds  [q] quit"
+                "[↑/↓] select  [r] run  [d] delete  [e] cron  [K] keep  [X] rm schedule  [Tab/7] sietches  [q] quit"
             } else {
                 "[r] run backup  [e] schedule  [q] quit"
             }
+        }
+        View::Sietches => {
+            "[Tab/1] worlds  read-only: manage Sietches via the CLI (sietches add/scale/remove/rename/password/edit)  [r] refresh  [q] quit"
         }
     };
     f.render_widget(
@@ -1428,14 +1481,6 @@ fn phase_color(phase: &str) -> Color {
 
 fn status_span(value: &str) -> Span<'static> {
     Span::styled(value.to_string(), Style::default().fg(phase_color(value)))
-}
-
-fn bool_span(value: bool) -> Span<'static> {
-    if value {
-        Span::styled("yes", Style::default().fg(Color::Green))
-    } else {
-        Span::styled("no", Style::default().fg(Color::Red))
-    }
 }
 
 fn check_line(label: &str, check: &Check) -> Line<'static> {

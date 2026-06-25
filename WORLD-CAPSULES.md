@@ -33,9 +33,10 @@ Assessed on 2026-05-26 (`kubectl get battlegroups -A`, `dune-ctl worlds list`):
   `1963158-0-shipping`. Funcom operators are `v1.5.0`.
 - Current cluster has one battlegroup namespace:
   `funcom-seabass-sh-db3533a2d5a25fb-silakw`.
-- Current public game RabbitMQ NodePorts (Live):
-  - AMQP: `31982`
-  - management HTTP: `30196`
+- Current public game RabbitMQ NodePort (Live):
+  - AMQP: `31982` (intentionally public; clients connect here)
+  - management HTTP: dynamic (e.g. `31506`), **not** public — the old `30196`
+    firewall opening was removed 2026-06-02 as it never matched the live NodePort.
 - The stock `world-template.yaml` pins the game RabbitMQ AMQP NodePort to
   `31982`. Both PTC and Live capsules share these public NodePorts, which is
   exactly why they cannot run simultaneously.

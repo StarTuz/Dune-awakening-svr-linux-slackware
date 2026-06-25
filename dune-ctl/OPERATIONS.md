@@ -46,6 +46,7 @@ dune-ctl
 | `4` | Settings | Managed settings with local values; inline set/toggle/apply |
 | `5` | Logs | Two-pane: pod selector (left) + last N log lines (right) |
 | `6` | Backups | Bundle list with age/size; trigger backup run with streaming output |
+| `7` | Sietches | Sietch capacity (active / partition slots) + the Sietch list (read-only; mutate via the `sietches` CLI) |
 
 `Tab` cycles through all views in order. `q` quits from any view.
 
@@ -54,12 +55,12 @@ dune-ctl
 | Key | Action |
 |-----|--------|
 | `Tab` | Next view |
-| `1`–`6` | Jump to view |
+| `1`–`7` | Jump to view |
 | `r` | Refresh (re-fetches health snapshot and current view data) |
 | `q` | Quit |
 
 Tab `1` is the world selector. Use `↑`/`↓` there to switch capsules; the
-active world retargets immediately and tabs `2` through `6` follow that world.
+active world retargets immediately and tabs `2` through `7` follow that world.
 
 ### Dashboard keys
 
@@ -223,7 +224,37 @@ dune-ctl sietches list        # Sietch table with phase/ready/players/port
 dune-ctl sietches start       # start the primary Sietch
 dune-ctl sietches stop        # stop the primary Sietch
 dune-ctl sietches restart     # rolling restart of the primary Sietch
+dune-ctl sietches add [--name "Sietch X"] [--password PW] [--dry-run] [--yes] [--skip-backup]
+dune-ctl sietches remove <partition-id> [--dry-run] [--yes] [--skip-backup]  # refuses primary/last
+dune-ctl sietches scale <N> [--dry-run] [--yes]              # set active Sietches (must be <= partitions)
+dune-ctl sietches rename <partition-id> "Sietch X" --yes     # set a Sietch's display name
+dune-ctl sietches password <partition-id> PW --yes           # set a Sietch's join password
+dune-ctl sietches edit        # Battlegroup Editor (bg-util): dimensions/Sietches, names, memory
+dune-ctl sietches edit --advanced   # raw BattleGroup YAML in the default editor
 ```
+
+`sietches add` reproduces bg-util's add-a-Sietch exactly (verified by CR diff):
+appends a `worldPartitions` entry (`dimension = max+1`, `id = global max + 1`,
+copied grid), adds the id to the set's `partitions`, raises `replicas`, and — with
+`--name` — attaches a `podSpecs` entry (`index = <partition id>`,
+`-execcmds="Bgd.ServerDisplayName '<name>'"`) so the Sietch has a unique name. It
+auto-backs-up first (skip with `--skip-backup`) and requires `--yes`; preview the
+CR patch with `--dry-run`. `sietches scale` enforces `active <= worldPartitions`
+count (a bare replicas bump beyond that crash-loops). `sietches rename` / `sietches password`
+set an existing Sietch's display name / join password by world-partition id
+(each preserving the entry's other per-pod arguments). `sietches remove` drops a
+Sietch (its `worldPartitions` entry, set partition id, `podSpecs` entry) and
+lowers `replicas`; it refuses the primary (dimension 0) and last Sietch, and
+auto-backs-up first. **A Sietch added without `--password` is public** and may
+appear in the server browser — set a password if it should be private. Still
+pending: TUI tab and capsule mirroring — see `SIETCHES-DESIGN.md`.
+
+`sietches edit` launches Funcom's Battlegroup Editor (`bg-util`) as
+`KUBE_EDITOR` on `kubectl edit battlegroup` — the supported way to add/manage
+Sietches (world "dimensions"), per-Sietch names/passwords, and per-map memory.
+Key rule it enforces: a map's max Sietches = its `worldPartitions` count, and
+active `replicas` must be ≤ that count (a bare replica bump crash-loops). Native
+`sietches add|remove|scale|rename` are planned — see `SIETCHES-DESIGN.md`.
 
 ### `dune-ctl battlegroup`
 
@@ -234,7 +265,9 @@ dune-ctl battlegroup restart
 ```
 
 Operates the entire battlegroup, not individual maps. After a restart, run
-`dune-ctl gateway-patch` to reapply the RMQ port argument.
+`dune-ctl preflight` and check the "gateway IP" row — the gateway's advertised
+`--RMQGameHostname` is operator-managed from the k3s `node-external-ip`, so no
+manual gateway patch is needed.
 
 ### `dune-ctl shutdown`
 
@@ -321,13 +354,13 @@ presence, and other deployment-specific invariants.
 ### `dune-ctl update`
 
 Full update pipeline: SteamCMD prefetch → funcom-patches → Funcom update →
-gateway patch. Streams output live.
+capsule apply → start → wait-ready. Streams output live.
 
-### `dune-ctl gateway-patch`
-
-Reapplies `--RMQGameHttpPort=30196` to the gateway Deployment. Idempotent.
-Required after any battlegroup restart because the gateway Deployment is
-recreated.
+> **Retired:** `dune-ctl gateway-patch` (and `scripts/gateway-patch.sh`) were
+> removed 2026-06-02. The gateway `--RMQGameHostname` is operator-managed from the
+> k3s `node-external-ip`, and the old `--RMQGameHttpPort=30196` arg was
+> unnecessary and stale. Use `dune-ctl preflight` (the "gateway IP" row) to verify
+> the advertised IP; rotate it via `PUBLIC-IP.md`.
 
 ### `dune-ctl token-check`
 
@@ -440,9 +473,9 @@ dune-ctl battlegroup stop
 # 3. Restore (--yes required)
 dune-ctl backup restore --yes <timestamp>
 
-# 4. Start and re-patch
+# 4. Start and verify
 dune-ctl battlegroup start
-dune-ctl gateway-patch
+dune-ctl preflight        # check the "gateway IP" row
 dune-ctl status
 ```
 
