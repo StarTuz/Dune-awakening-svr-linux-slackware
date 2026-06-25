@@ -1,7 +1,10 @@
 use anyhow::Result;
+use std::collections::VecDeque;
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+use tokio::sync::Mutex;
 
 use crate::{backup, battlegroup, config::Config, health::HealthSnapshot};
 
@@ -105,6 +108,12 @@ async fn run_live_capsule_streamed(
     tx: tokio::sync::mpsc::UnboundedSender<String>,
 ) -> Result<()> {
     send(&tx, "live capsule update selected");
+    send(
+        &tx,
+        "step 0/9: verify non-interactive sudo access for kubectl/ctr",
+    );
+    verify_live_capsule_sudo().await?;
+
     send(&tx, "step 1/9: backup");
     backup::run_streamed(cfg, false, None, tx.clone()).await?;
 
@@ -182,7 +191,45 @@ async fn run_capsule_command(
     let script = cfg.scripts_dir.join("world-capsules.sh");
     let mut cmd = Command::new("bash");
     cmd.arg(&script).args(args);
-    stream_command(cmd, &script.display().to_string(), tx).await
+    let label = format_command_label(&script, args);
+    stream_command(cmd, &label, tx).await
+}
+
+async fn verify_live_capsule_sudo() -> Result<()> {
+    verify_sudo_command(&["kubectl", "version", "--client=true"]).await?;
+    verify_sudo_command(&["ctr", "-n", "k8s.io", "images", "ls", "-q"]).await?;
+    Ok(())
+}
+
+async fn verify_sudo_command(args: &[&str]) -> Result<()> {
+    let output = Command::new("sudo").arg("-n").args(args).output().await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "non-interactive sudo for `{}` is required for live capsule update; run `sudo -v` before launching the TUI or configure passwordless sudo for kubectl/ctr. sudo said: {}",
+            args.join(" "),
+            stderr.trim()
+        );
+    }
+    Ok(())
+}
+
+fn format_command_label(script: &std::path::Path, args: &[&str]) -> String {
+    std::iter::once(script.display().to_string())
+        .chain(args.iter().map(|arg| shell_quote(arg)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_quote(value: &str) -> String {
+    if value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | ':' | '='))
+    {
+        value.to_string()
+    } else {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
 }
 
 async fn stream_command(
@@ -191,6 +238,7 @@ async fn stream_command(
     tx: tokio::sync::mpsc::UnboundedSender<String>,
 ) -> Result<()> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let recent = Arc::new(Mutex::new(VecDeque::<String>::with_capacity(24)));
     let mut child = cmd
         .spawn()
         .map_err(|e| anyhow::anyhow!("failed to spawn {}: {}", label, e))?;
@@ -198,17 +246,22 @@ async fn stream_command(
     let stdout = child.stdout.take().expect("stdout piped");
     let stderr = child.stderr.take().expect("stderr piped");
     let tx2 = tx.clone();
+    let recent_stdout = recent.clone();
+    let recent_stderr = recent.clone();
 
     let stdout_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            remember_line(&recent_stdout, &line).await;
             let _ = tx.send(line);
         }
     });
     let stderr_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let _ = tx2.send(format!("[err] {}", line));
+            let line = format!("[err] {}", line);
+            remember_line(&recent_stderr, &line).await;
+            let _ = tx2.send(line);
         }
     });
 
@@ -217,9 +270,27 @@ async fn stream_command(
     let _ = stderr_task.await;
 
     if !status.success() {
-        anyhow::bail!("{} exited with status {}", label, status);
+        let recent = recent.lock().await;
+        let tail = recent.iter().cloned().collect::<Vec<_>>().join("\n");
+        if tail.is_empty() {
+            anyhow::bail!("{} exited with status {}", label, status);
+        }
+        anyhow::bail!(
+            "{} exited with status {}\nlast output:\n{}",
+            label,
+            status,
+            tail
+        );
     }
     Ok(())
+}
+
+async fn remember_line(recent: &Arc<Mutex<VecDeque<String>>>, line: &str) {
+    let mut recent = recent.lock().await;
+    if recent.len() == 24 {
+        recent.pop_front();
+    }
+    recent.push_back(line.to_string());
 }
 
 async fn wait_ready(cfg: &Config, tx: tokio::sync::mpsc::UnboundedSender<String>) -> Result<()> {

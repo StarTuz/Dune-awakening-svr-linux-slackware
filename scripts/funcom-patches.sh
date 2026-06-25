@@ -1,9 +1,9 @@
 #!/bin/bash
-# Re-apply Slackware patches to Funcom-shipped scripts.
+# Re-apply Slackware patches to Funcom-shipped scripts/config.
 #
 # Background: SteamCMD overwrites everything under server/scripts/ on every
-# update. Our Slackware-specific edits to those scripts (in scripts/funcom-patches/)
-# need to be re-applied after each update. Wired into update.sh.
+# update. Our Slackware-specific edits to those files need to be re-applied
+# after each update. Wired into update.sh.
 #
 # Layout under scripts/funcom-patches/:
 #   <name>.sh           — our patched version (full file)
@@ -23,6 +23,29 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PATCH_DIR="$SCRIPT_DIR/funcom-patches"
 TARGET_DIR="$SCRIPT_DIR/../server/scripts/setup"
+CONFIG_DIR="$TARGET_DIR/config"
+
+patch_userengine_ports() {
+    local file="$CONFIG_DIR/UserEngine.ini"
+    if [[ ! -f "$file" ]]; then
+        echo "SKIP UserEngine.ini — target $file does not exist"
+        return 0
+    fi
+
+    if grep -q '^Port=7782$' "$file" && grep -q '^IGWPort=7893$' "$file"; then
+        echo "OK   UserEngine.ini — Dune port base already 7782/7893"
+        return 0
+    fi
+
+    cp "$file" "$file.bak-port-$(date -u +%Y%m%d%H%M%S)"
+    perl -0pi -e '
+        s/^Port=\d+$/Port=7782/m;
+        s/^IGWPort=\d+$/IGWPort=7893/m;
+        s/7777, 7778 etc\./7782, 7783 etc./g;
+        s/7888, 7889 etc\./7893, 7894 etc./g;
+    ' "$file"
+    echo "PATCH UserEngine.ini — set Dune port base to 7782/7893"
+}
 
 if [[ ! -d "$PATCH_DIR" ]]; then
     echo "No funcom-patches/ dir; nothing to do."
@@ -64,5 +87,7 @@ for patched in "$PATCH_DIR"/*.sh; do
     echo "     to accept new upstream: cp $target $upstream  (and update $patched)"
     status=1
 done
+
+patch_userengine_ports
 
 exit $status

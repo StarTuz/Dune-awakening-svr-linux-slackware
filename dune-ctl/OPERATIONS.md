@@ -68,7 +68,6 @@ active world retargets immediately and tabs `2` through `7` follow that world.
 |-----|--------|
 | `Q` | Clean Dune shutdown for planned host reboot/maintenance |
 | `u` | Run update and start after |
-| `g` | Reapply gateway patch |
 | `A` / `Z` / `R` | Start / stop / restart primary Sietch |
 
 ### Maps view keys
@@ -120,8 +119,9 @@ dune-ctl status
 
 ### `dune-ctl preflight [--strict]`
 
-Go/no-go check before opening the server. Tests firewall backend, gateway patch,
-FLS token, primary Sietch health, and RAM. Exits non-zero on failure.
+Go/no-go check before opening the server. Tests firewall backend, gateway
+advertised IP, FLS token, primary Sietch health, runtime game ports, and RAM.
+Exits non-zero on failure.
 `--strict` also fails on warnings.
 
 ```sh
@@ -142,9 +142,10 @@ dune-ctl --world Ixware public-ip apply-detected --dry-run
 ```
 
 `set` updates local world/capsule files, patches the live BattleGroup utility
-env vars, repairs the gateway `--RMQGameHostname`, ensures
-`--RMQGameHttpPort=30196`, and removes stale last-applied metadata. Use
-`--skip-files` or `--skip-live` when intentionally updating only one side.
+env vars, repairs the gateway `--RMQGameHostname`, and removes stale
+last-applied metadata. The gateway hostname is made durable by the k3s
+`node-external-ip`; see `PUBLIC-IP.md`. Use `--skip-files` or `--skip-live` when
+intentionally updating only one side.
 `check` uses HTTPS public-IP providers and requires two matching valid public IP
 responses. It exits non-zero when the detected IP differs from configured state.
 `apply-detected` requires the same provider quorum and refuses to mutate unless
@@ -185,7 +186,11 @@ dune-ctl capsules activate --env live --world-id sh-db3533a2d5a25fb-silakw
 dune-ctl maps list            # all 28 maps with current phase + persist state
 dune-ctl maps start <name>    # start a stopped map
 dune-ctl maps stop  <name>    # stop a running map
-dune-ctl maps start SH_Arrakeen --force   # bypass social-hub guard
+dune-ctl maps persist DeepDesert_1 --on --yes       # always-on DD for T5/T6 resource UX
+dune-ctl maps persist SH_Arrakeen --on --yes        # always-on social hub quest gates
+dune-ctl maps persist SH_HarkoVillage --on --yes    # always-on social hub quest gates
+dune-ctl maps prewarm DeepDesert_1 --yes            # start now after persistence
+dune-ctl maps start SH_Arrakeen --force        # low-level recovery/debug only
 dune-ctl maps persist <name> --on  --yes  # director-persistent (MinServers=1)
 dune-ctl maps persist <name> --off --yes  # remove persistence (MinServers=0)
 ```
@@ -193,10 +198,14 @@ dune-ctl maps persist <name> --off --yes  # remove persistence (MinServers=0)
 Map names are case-sensitive and match the Kubernetes ServerSet names
 (`Survival_1`, `DeepDesert_1`, `Overmap`, `SH_Arrakeen`, etc.).
 
-Social hub maps (`SH_*`) are director-managed. Starting one manually puts the
-game in an inconsistent state unless the director has already allocated it.
-Use `--force` only when you know what you are doing. Prefer joining the map
-in-game to trigger director allocation.
+DeepDesert_1, `SH_Arrakeen`, and `SH_HarkoVillage` are director-managed and are
+part of the always-on baseline. Keep them persistent (`MinServers=1`) and
+running. Deep Desert needs warm uptime for spice/flour field spawning during
+Tier 5/6 progression; social hubs stay warm because trainer dialogue can depend
+on destination availability before the travel/dialogue branch is offered.
+`prewarm` is only the "start now" half after persistence is already set. Use
+`maps start <Map> --force` only for low-level recovery/debugging because it
+bypasses the director availability model.
 
 #### Map persistence (`maps persist`)
 
@@ -206,7 +215,8 @@ a layer **separate from** `start`/`stop` (replicas/ServerSetScale):
 - `start`/`stop` are imperative "on/off now".
 - `persist --on` (MinServers=1) tells the director to keep at least one server
   of the map alive and **auto-restart it after a reboot**. It does *not* start
-  the map immediately — pair with `maps start` to bring it up now.
+  the map immediately — pair with `maps prewarm <Map> --yes` to bring a
+  director-managed map up now.
 - `persist --off` (MinServers=0) is required before a `stop` will stick; while a
   map is persistent, `maps stop` warns that the director will restart it.
 
@@ -214,8 +224,8 @@ The change is written to the live BattleGroup CR (durable across operator
 reconcile) and mirrored into the capsule source `battlegroup.yaml` so a
 cold-swap re-activation does not revert it. `maps list`, the `status` table, and
 the TUI Maps view show the persistence state. Requires `--yes` (it edits the
-live CR). Social hubs (`SH_*`) are intentionally not made persistent by default —
-leave them on the director's on-demand handshake.
+live CR). Current Ixware baseline keeps `DeepDesert_1`, `SH_Arrakeen`, and
+`SH_HarkoVillage` persistent.
 
 ### `dune-ctl sietches`
 
@@ -246,15 +256,14 @@ set an existing Sietch's display name / join password by world-partition id
 Sietch (its `worldPartitions` entry, set partition id, `podSpecs` entry) and
 lowers `replicas`; it refuses the primary (dimension 0) and last Sietch, and
 auto-backs-up first. **A Sietch added without `--password` is public** and may
-appear in the server browser — set a password if it should be private. Still
-pending: TUI tab and capsule mirroring — see `SIETCHES-DESIGN.md`.
+appear in the server browser — set a password if it should be private. Capsule
+auto-mirroring for Sietch topology is intentionally not automatic; use
+`sietches edit`/`bg-util` against the capsule copy if a live Sietch topology
+change must survive cold-swap reactivation. See `SIETCHES-DESIGN.md`.
 
 `sietches edit` launches Funcom's Battlegroup Editor (`bg-util`) as
-`KUBE_EDITOR` on `kubectl edit battlegroup` — the supported way to add/manage
-Sietches (world "dimensions"), per-Sietch names/passwords, and per-map memory.
-Key rule it enforces: a map's max Sietches = its `worldPartitions` count, and
-active `replicas` must be ≤ that count (a bare replica bump crash-loops). Native
-`sietches add|remove|scale|rename` are planned — see `SIETCHES-DESIGN.md`.
+`KUBE_EDITOR` on `kubectl edit battlegroup` for advanced dimensions, per-map
+memory, and raw editor parity.
 
 ### `dune-ctl battlegroup`
 
@@ -348,13 +357,24 @@ The TUI Dashboard header also shows a live player count.
 
 ### `dune-ctl diagnostics`
 
-Checks firewall backend (must be `iptables`, not `nftables`), gateway patch
-presence, and other deployment-specific invariants.
+Checks firewall backend (must be `iptables`, not `nftables`), gateway
+advertised IP, and other deployment-specific invariants.
 
 ### `dune-ctl update`
 
-Full update pipeline: SteamCMD prefetch → funcom-patches → Funcom update →
-capsule apply → start → wait-ready. Streams output live.
+Full update pipeline. For the active Live capsule, the TUI/default update path
+runs backup → SteamCMD package install/validate → image import → image verify →
+capsule refresh → capsule apply → start → wait-ready. Streams output live.
+
+Live capsule updates require non-interactive sudo for `kubectl` and `ctr`.
+`dune-ctl` checks that before mutating anything. If a `world-capsules.sh`
+subcommand fails, the error includes the exact subcommand and recent output.
+
+2026-06-24 failure note: `world-capsules.sh images verify` used to check images
+with `sudo ctr ... | grep -q` under `pipefail`; `grep -q` could close the pipe
+early after a match, causing a false missing-image result and aborting before
+capsule refresh/apply. The verifier now reads the containerd image list once and
+matches against that stable list.
 
 > **Retired:** `dune-ctl gateway-patch` (and `scripts/gateway-patch.sh`) were
 > removed 2026-06-02. The gateway `--RMQGameHostname` is operator-managed from the
@@ -362,10 +382,97 @@ capsule apply → start → wait-ready. Streams output live.
 > unnecessary and stale. Use `dune-ctl preflight` (the "gateway IP" row) to verify
 > the advertised IP; rotate it via `PUBLIC-IP.md`.
 
-### `dune-ctl token-check`
+### `dune-ctl token`
 
-Prints FLS token expiry. Exits `2` if ≤ 14 days remain or token is expired.
-Safe to call from cron for early warning.
+```sh
+dune-ctl --world Ixware token check
+dune-ctl --world Ixware token rotate --token-file /tmp/dune-new-fls-token --dry-run
+dune-ctl --world Ixware token rotate --token-file /tmp/dune-new-fls-token --yes
+```
+
+`token check` prints FLS token expiry. Exits `2` if ≤ 14 days remain or token is
+expired. Safe to call from cron for early warning. The legacy
+`dune-ctl token-check` alias is still available.
+
+`token rotate` validates the replacement JWT, verifies its `HostId` matches the
+active capsule, backs up and rewrites the capsule `battlegroup.yaml` and
+`fls-secret.yaml`, applies the FLS secret and BattleGroup, preserves/restores
+`spec.stop: false` for a running world, and waits for gateway/director/RMQ and
+`Survival_1` readiness. It reports only metadata and replacement counts; it does
+not print the token. Use `--token-file` or the masked prompt instead of
+`--token` to keep the token out of shell history.
+
+#### FLS token backend revocation
+
+`token-check` only verifies the JWT expiry embedded in the local token. It does
+not prove Funcom still has the matching service authorization record on their
+backend.
+
+Observed on 2026-06-22: `Ixware`
+(`sh-db3533a2d5a25fb-silakw`) vanished from the in-game browser and login failed
+after the host had otherwise recovered from a Slackware/k3s restart. Local
+preflight had been OK earlier, firewall/router ports were correct, and the old
+token's JWT expiry was still in 2027. The account page no longer showed the
+self-host token. Gateway and director logs showed:
+
+```text
+403002 ACCESS_DENIED
+Could not find service authorization information for Battlegroup: sh-db3533a2d5a25fb-silakw
+```
+
+This was not fixed by rebuilding the world. A newly generated self-host token
+with the same `HostId` repaired the existing battlegroup in place.
+
+Recovery checklist:
+
+```sh
+# 1. Confirm local health and capture the FLS error.
+dune-ctl --world Ixware preflight
+sudo kubectl logs -n funcom-seabass-sh-db3533a2d5a25fb-silakw \
+  deploy/sh-db3533a2d5a25fb-silakw-sgw-deploy --tail=160
+sudo kubectl logs -n funcom-seabass-sh-db3533a2d5a25fb-silakw \
+  deploy/sh-db3533a2d5a25fb-silakw-bgd-deploy --tail=220
+
+# 2. Generate a replacement token in the Funcom account portal and stage it
+#    without putting it in shell history.
+umask 077
+printf 'Paste new FLS token, then Enter: '
+IFS= read -r token
+printf '%s\n' "$token" > /tmp/dune-new-fls-token
+unset token
+
+# 3. Inspect the rotation plan, then apply it in place.
+dune-ctl --world Ixware token rotate --token-file /tmp/dune-new-fls-token --dry-run
+dune-ctl --world Ixware token rotate --token-file /tmp/dune-new-fls-token --yes
+```
+
+`token rotate` decodes the token locally and verifies `HostId` matches the
+existing world (`DB3533A2D5A25FB` for Ixware). If the HostId differs, it refuses
+to apply; that may be a different self-host identity.
+
+The command rotates in place, not by recreating the world:
+
+- Back up the current capsule files.
+- Replace all `ServiceAuthToken=` game-server arguments in
+  `~/.dune/capsules/live/<battlegroup>/battlegroup.yaml`.
+- Replace the three `FuncomLiveServices__ServiceAuthToken` env-var values for
+  director, gateway, and text-router in the same `battlegroup.yaml`.
+- Replace `FuncomLiveServices__ServiceAuthToken` in the capsule
+  `fls-secret.yaml`.
+- Keep or restore `spec.stop: false` before applying the full BattleGroup YAML;
+  a stale capsule copy with `stop: true` will intentionally stop the world.
+- Apply the FLS secret and BattleGroup, then wait for the operator to restart
+  the utilities and game pods.
+
+Success signs:
+
+- Gateway `GatewayDeclareFarmStatus` proceeds to "Monitoring for servers going
+  up or down" instead of `ACCESS_DENIED`.
+- Director FLS calls such as `Battlegroups_SendBattlegroupHeartbeat`,
+  `Battlegroups_DeclarePopulationAndActivity`, and
+  `Battlegroups_DeclareBattlegroupUpdates` report "Request successful".
+- `dune-ctl --world Ixware preflight` reports the new expiry and `Summary: OK`.
+- The in-game browser lists the server again after FLS/browser refresh delay.
 
 ---
 

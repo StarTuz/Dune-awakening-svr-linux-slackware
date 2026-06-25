@@ -148,6 +148,8 @@ scripts/world-capsules.sh create --env live --name <title> --token <token> --pac
 scripts/world-capsules.sh package install --env live
 scripts/world-capsules.sh package validate --env live
 scripts/world-capsules.sh images load --env live
+scripts/world-capsules.sh images verify --env live
+scripts/world-capsules.sh refresh --env live --world-id <bg>
 scripts/world-capsules.sh park --world <bg>
 scripts/world-capsules.sh activate --world <bg>
 scripts/world-capsules.sh delete-k8s --world <bg> --yes
@@ -163,6 +165,8 @@ Implemented now:
 - `package install`
 - `package validate`
 - `images load`
+- `images verify`
+- `refresh`
 - `create`
 - `activate` dry-run, with `--apply` guarded against existing battlegroups
 
@@ -222,11 +226,17 @@ For a cold swap:
    export exist.
 7. Point `~/.dune/download` at the target package root.
 8. Ensure target package images are loaded into containerd.
-9. Ensure operator/CRD version compatibility with the target package.
-10. Apply target secrets and BattleGroup YAML.
-11. Wait for namespace, DB, message queues, gateway, director, and game pods.
-12. Apply gateway patch.
-13. Verify `dune-ctl --world <target> status`, diagnostics, token, and login.
+9. Verify expected package images are registered in containerd.
+10. Refresh the capsule metadata/YAML from the package image tag.
+11. Ensure operator/CRD version compatibility with the target package.
+12. Apply target secrets and BattleGroup YAML.
+13. Wait for namespace, DB, message queues, gateway, director, and game pods.
+14. Verify `dune-ctl --world <target> preflight`, status, token, and login.
+
+2026-06-24 note: `images verify` must not use `ctr ... | grep -q` directly
+under `pipefail`; `grep -q` can close the pipe after a match and make `ctr`
+report SIGPIPE, producing a false missing-image failure. The script now reads
+the image list once and matches against the captured list.
 
 Do not restore PTC DB data into Live. Official Live starts fresh unless Funcom
 provides a separate official character transfer path.

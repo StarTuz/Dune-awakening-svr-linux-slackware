@@ -18,11 +18,13 @@ system shape and control loops. `FILE-LOCATIONS.md` indexes important paths.
 - Active battlegroup (Live capsule): `sh-db3533a2d5a25fb-silakw` / `Ixware`
 - Namespace: `funcom-seabass-sh-db3533a2d5a25fb-silakw`
 - Inactive PTC capsule: `sh-db3533a2d5a25fb-xyyxbx` / `Slackware-Arrakis`
-- Current maps: `Survival_1`, `Overmap`, and `DeepDesert_1` can all be run together when validating travel/load behavior
+- Current always-on maps: `Survival_1`, `Overmap`, `DeepDesert_1`,
+  `SH_Arrakeen`, and `SH_HarkoVillage`
 - Server browser: visible in the PTC/Experimental browser
 - Hagga Basin travel: confirmed working after firewall cleanup
 - Platform: Slackware current, kernel `6.18.27`, k3s `v1.36.0+k3s1`
-- Host sizing: 16 GiB RAM with heavy SSD-backed swap; Conan Exiles Enhanced is co-resident on the same machine
+- Host sizing: 64 GiB RAM with SSD/zram swap headroom; Conan Exiles Enhanced is
+  co-resident on the same machine
 
 ## Important Operational Notes
 
@@ -43,6 +45,12 @@ system shape and control loops. `FILE-LOCATIONS.md` indexes important paths.
 - firewalld must use `FirewallBackend=iptables` — the nftables backend
   conflicts with k3s/flannel CNI. Verify with
   `grep FirewallBackend /etc/firewalld/firewalld.conf`.
+- If the server disappears from the in-game browser while local preflight is
+  otherwise healthy, check gateway/director logs for FLS `403002 ACCESS_DENIED`.
+  On 2026-06-22 Funcom's backend no longer accepted the existing self-host token
+  even though its JWT expiry was still valid; rotating a newly generated token in
+  place restored browser visibility and login without rebuilding the world. See
+  `dune-ctl/OPERATIONS.md` under "FLS token backend revocation".
 
 - The current host is not memory-starved in the old sense, but it is swap-heavy
   by design. Use resource snapshots when you want a real picture of DD load
@@ -74,13 +82,10 @@ sudo kubectl get serverset,serversetscale,serverstats -n funcom-seabass-sh-db353
 
 # Maps
 ~/dune-server/scripts/map-toggle.sh list
-~/dune-server/scripts/map-toggle.sh start DeepDesert_1
-~/dune-server/scripts/map-toggle.sh stop DeepDesert_1
-~/dune-server/dune-ctl/target/release/dune-ctl maps start SH_Arrakeen
-~/dune-server/dune-ctl/target/release/dune-ctl maps stop SH_Arrakeen
 ~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware maps list
-~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware maps start DeepDesert_1
-~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware maps stop DeepDesert_1
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware maps persist DeepDesert_1 --on --yes
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware maps persist SH_Arrakeen --on --yes
+~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware maps persist SH_HarkoVillage --on --yes
 
 # Firewall sanity
 grep -n '^FirewallBackend' /etc/firewalld/firewalld.conf
@@ -106,7 +111,8 @@ sudo ~/dune-server/scripts/system-snapshot.sh known-good-YYYYMMDD  # full btrfs 
 ## Networking
 
 The Dune game UDP range is `7782-7790`. Conan Exiles owns `7777-7778` and other
-ports documented in `CLAUDE.md`, so Dune is kept above that range.
+ports documented in `CLAUDE.md`, so Dune is configured with `Port=7782` and
+`IGWPort=7893` instead of relying on implicit port skipping.
 
 ## Multi-World Note
 
@@ -162,11 +168,19 @@ intentional, `settings apply --force` or `settings apply-restart --force` can
 overwrite the deployed copy; otherwise use `settings pull` to make local match
 the live deployed settings before further edits.
 
+The active Live `UserEngine.ini` must keep `Port=7782` and `IGWPort=7893`.
+Older backups and Funcom defaults used `7777` / `7888`, relying on port
+preemption to push Dune upward. That stopped being safe after the 2026-06-03
+server update: the game advertised `7777/7778`, outside the router-forwarded
+Dune range, causing P34 connection timeouts. `dune-ctl preflight` now fails when
+ready runtime servers advertise game ports outside `7782-7790`.
+
 ## dune-ctl Command Reference
 
 Use `--world Ixware` or `--world sh-db3533a2d5a25fb-silakw` to target the
-active Live capsule; `--world Ixware` targets the inactive PTC
-capsule. The TUI is the default when no subcommand is provided.
+active Live capsule. Use `--world Slackware-Arrakis` or
+`--world sh-db3533a2d5a25fb-xyyxbx` only when intentionally inspecting the
+inactive PTC capsule. The TUI is the default when no subcommand is provided.
 Examples below use `dune-ctl`; replace that with
 `~/dune-server/dune-ctl/target/release/dune-ctl` if it is not in `PATH`.
 
@@ -177,7 +191,8 @@ dune-ctl --world Ixware status
 dune-ctl --world Ixware preflight
 dune-ctl --world Ixware preflight --strict
 dune-ctl --world Ixware diagnostics
-dune-ctl --world Ixware token-check
+dune-ctl --world Ixware token check
+dune-ctl --world Ixware token rotate --token-file /tmp/dune-new-fls-token --dry-run
 
 # Primary Sietch lifecycle
 dune-ctl --world Ixware sietches list

@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""Hold UDP 7779-7781 on the host so Dune game servers bind to 7782+ instead.
-Path of Titans (192.168.254.100) owns 7777-7781 on the router; this prevents
-Dune from claiming conflicting ports when its pods start."""
+"""Historical extra guard for the old implicit Dune port-skip setup.
+
+Dune now explicitly sets Port=7782 / IGWPort=7893 in UserEngine.ini, so this
+should not be the primary mechanism that keeps game ports in the router-forwarded
+range. It still holds 7779-7781 because Path of Titans owns that range on the
+router and this makes regressions more obvious.
+"""
 import socket, signal, sys, time
 
 PORTS = [7779, 7780, 7781]

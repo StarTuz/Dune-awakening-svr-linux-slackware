@@ -6,15 +6,17 @@ use crate::{config::Config, kubectl};
 const DIRECTOR_INI_POINTER: &str = "/spec/utilities/director/spec/configFiles/files/director.ini";
 const PERSIST_KEY: &str = "MinServers";
 
+pub fn is_director_managed_social_hub(map_name: &str) -> bool {
+    map_name.starts_with("SH_")
+}
+
 pub async fn start(cfg: &Config, map_name: &str, force: bool) -> Result<()> {
-    if map_name.starts_with("SH_") && !force {
+    if is_director_managed_social_hub(map_name) && !force {
         anyhow::bail!(
             "'{}' is a director-managed social hub.\n\
-             Social hubs are allocated on demand when a player travels to them — \
-             forcing one up via 'maps start' bypasses the director session handshake \
-             and the transition will fail or be immediately shut down (MinServers=0).\n\
-             Travel to the hub in-game instead; the director will start it automatically.\n\
-             Use --force to override this guard.",
+             Use 'maps prewarm {} --yes' to make it available through the director. \
+             Use --force only for low-level recovery/debugging.",
+            map_name,
             map_name
         );
     }
@@ -23,6 +25,51 @@ pub async fn start(cfg: &Config, map_name: &str, force: bool) -> Result<()> {
 
 pub async fn stop(cfg: &Config, map_name: &str) -> Result<()> {
     toggle(cfg, map_name, 0).await
+}
+
+pub async fn prewarm(cfg: &Config, map_name: &str) -> Result<PersistOutcome> {
+    let outcome = set_persistence(cfg, map_name, true, false).await?;
+    request_scale(cfg, map_name, 1).await?;
+    Ok(outcome)
+}
+
+pub async fn request_scale(cfg: &Config, map_name: &str, replicas: u32) -> Result<()> {
+    let bg =
+        kubectl::get_json(&["get", "battlegroup", &cfg.battlegroup, "-n", &cfg.namespace]).await?;
+
+    let scale_name = format!("{}-{}", cfg.battlegroup, map_slug(map_name));
+    kubectl::run(&["get", "serversetscale", &scale_name, "-n", &cfg.namespace])
+        .await
+        .with_context(|| format!("ServerSetScale '{}' not found", scale_name))?;
+
+    let mut scale_patch = Vec::new();
+    if replicas > 0 {
+        let map_partitions = world_partitions(&bg, map_name).ok_or_else(|| {
+            anyhow::anyhow!("no enabled world partition IDs found for '{}'", map_name)
+        })?;
+        scale_patch.push(json!({
+            "op": "add",
+            "path": "/spec/partitions",
+            "value": map_partitions,
+        }));
+    }
+    scale_patch.push(json!({
+        "op": "replace",
+        "path": "/spec/replicas",
+        "value": replicas,
+    }));
+    let scale_patch = serde_json::to_string(&scale_patch)?;
+    kubectl::run(&[
+        "patch",
+        "serversetscale",
+        &scale_name,
+        "-n",
+        &cfg.namespace,
+        "--type=json",
+        &format!("-p={}", scale_patch),
+    ])
+    .await?;
+    Ok(())
 }
 
 async fn toggle(cfg: &Config, map_name: &str, replicas: u32) -> Result<()> {
@@ -244,7 +291,10 @@ pub async fn set_persistence(
             Err(e) => (Some(false), Some(format!("capsule mirror skipped: {}", e))),
         }
     } else if also_capsule {
-        (None, Some("no capsule for this world; live CR only".to_string()))
+        (
+            None,
+            Some("no capsule for this world; live CR only".to_string()),
+        )
     } else {
         (None, None)
     };
@@ -262,8 +312,8 @@ pub async fn set_persistence(
 /// `ini`. Returns whether the file changed.
 fn update_capsule_director_ini(cfg: &Config, ini: &str) -> Result<bool> {
     let path = cfg.capsule_dir().join("battlegroup.yaml");
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let new_text = replace_yaml_block(&text, "director.ini", ini)?;
     if new_text == text {
         return Ok(false);
@@ -281,7 +331,9 @@ pub fn set_min_servers(ini: &str, map: &str, on: bool) -> String {
     let target: u32 = if on { 1 } else { 0 };
     let mut lines: Vec<String> = ini.lines().map(str::to_string).collect();
 
-    let section_start = lines.iter().position(|l| section_name(l).as_deref() == Some(map));
+    let section_start = lines
+        .iter()
+        .position(|l| section_name(l).as_deref() == Some(map));
 
     match section_start {
         Some(start) => {
@@ -361,7 +413,9 @@ fn replace_yaml_block(text: &str, key: &str, content: &str) -> Result<String> {
         }
     }
     // Trailing blank lines belong to the separator, not the block.
-    let last_content = (header_idx + 1..greedy_end).rev().find(|&i| !lines[i].trim().is_empty());
+    let last_content = (header_idx + 1..greedy_end)
+        .rev()
+        .find(|&i| !lines[i].trim().is_empty());
     let body_end = last_content.map(|i| i + 1).unwrap_or(header_idx + 1);
 
     let body_indent = (header_idx + 1..body_end)
@@ -453,7 +507,8 @@ mod tests {
     #[test]
     fn replaces_yaml_block_preserving_indent_and_tail() {
         let yaml = "        configFiles:\n          files:\n            director.ini: |-\n              [ Battlegroup ]\n              MinServers = 0\n          other: value\n";
-        let new = replace_yaml_block(yaml, "director.ini", "[ Battlegroup ]\nMinServers = 1").unwrap();
+        let new =
+            replace_yaml_block(yaml, "director.ini", "[ Battlegroup ]\nMinServers = 1").unwrap();
         assert!(new.contains("            director.ini: |-\n              [ Battlegroup ]\n              MinServers = 1\n          other: value"));
     }
 }

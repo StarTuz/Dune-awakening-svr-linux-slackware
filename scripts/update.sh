@@ -8,7 +8,7 @@
 #   4. Run Funcom's update flow.
 #   5. Re-apply local Slackware patches after any script overwrite.
 #   6. Re-assert/check/repair DB credentials expected by Funcom db utils.
-#   7. Re-apply the gateway RMQ HTTP port patch.
+#   7. Verify advertised IP and Dune game ports with dune-ctl preflight.
 
 set -euo pipefail
 

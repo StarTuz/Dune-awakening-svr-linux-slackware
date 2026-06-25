@@ -431,10 +431,8 @@ fn draw_sietches_view(f: &mut Frame, app: &App, area: Rect) {
     }
     if slots <= 1 {
         lines.push(
-            Line::from(
-                "Single-Sietch world (the quest-recovery 'switch Sietch' path needs >= 2).",
-            )
-            .style(Style::default().fg(Color::DarkGray)),
+            Line::from("Single-Sietch world (the quest-recovery 'switch Sietch' path needs >= 2).")
+                .style(Style::default().fg(Color::DarkGray)),
         );
     }
     lines.push(Line::from(""));
@@ -873,8 +871,10 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
-    if app.update_task.is_some() || app.shutdown_task.is_some() {
-        let op = if app.shutdown_task.is_some() {
+    if app.update_task.is_some() || app.shutdown_task.is_some() || app.token_rotate_task.is_some() {
+        let op = if app.token_rotate_task.is_some() {
+            "FLS token rotation running..."
+        } else if app.shutdown_task.is_some() {
             "clean shutdown running..."
         } else {
             "update running..."
@@ -889,7 +889,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
     let hint = match app.view {
         View::Worlds => "[↑/↓] select world  [I] init profile  [r] refresh  [q] quit",
         View::Dashboard => {
-            "[A] start world  [Z] stop world  [R] restart  [Q] clean shutdown  [u] update  [r] refresh"
+            "[A] start world  [Z] stop world  [R] restart  [Q] clean shutdown  [u] update  [T] rotate token  [r] refresh"
         }
         View::Maps => "[Tab/4] settings  [s/x] map start/stop  [r] refresh  [q] quit",
         View::Settings => {
@@ -1356,6 +1356,11 @@ fn draw_input(f: &mut Frame, app: &App) {
         return;
     };
     let area = centered_rect(68, 10, f.area());
+    let shown_value = if input.secret {
+        "*".repeat(input.value.chars().count())
+    } else {
+        input.value.clone()
+    };
     let lines = vec![
         Line::from(Span::styled(
             format!("Edit {}", input.key),
@@ -1367,7 +1372,7 @@ fn draw_input(f: &mut Frame, app: &App) {
         Line::from(""),
         Line::from(vec![
             Span::styled("Value: ", Style::default().fg(Color::DarkGray)),
-            Span::raw(input.value.as_str()),
+            Span::raw(shown_value),
             Span::styled(" ", Style::default().bg(Color::White)),
         ]),
         Line::from(""),
