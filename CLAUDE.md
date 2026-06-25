@@ -15,6 +15,7 @@ Doc index:
 - `BACKUP-RESTORE.md` — backup/restore runbook
 - `OFFSITE-BACKUP.md` — off-server replication (two restic repos: Backblaze B2 + Google Drive)
 - `WORLD-CAPSULES.md` — PTC/Live cold-swap world isolation model
+- `MULTI-WORLD.md` — hot-swap multiple Live worlds (design; for separate-character worlds)
 - `PUBLIC-IP.md` — public-IP rotation runbook
 - `INSTALLER-DESIGN.md` — future cross-distro installer direction
 - `dune-ctl/OPERATIONS.md` — full `dune-ctl` CLI/TUI reference
