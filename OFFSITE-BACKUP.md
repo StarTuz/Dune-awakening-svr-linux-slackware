@@ -229,25 +229,33 @@ scripts/offsite-sync.sh --repo b2 prune       # only past the 30-day lock window
 
 ## Restore from off-site (drill quarterly)
 
-Off-site backups are not "proven" until a restore has been pulled from them.
-restic restores byte-identical files; validate the dump itself with `pg_restore`
-inside the postgres pod (the host has no `pg_restore`).
+Off-site backups are not "proven" until a restore has been pulled from them and
+actually imported. `scripts/offsite-restore-drill.sh` does the full end-to-end
+test, non-destructively:
 
 ```sh
-set -a; . ~/.dune/offsite.env; set +a
-for repo in $OFFSITE_REPOS; do
-  tgt=$(mktemp -d)
-  restic -r "$repo" restore latest --target "$tgt"      # pull newest snapshot
-  dump=$(find "$tgt" -name '*.backup' | head -1)
-  file "$dump"                                           # expect: PostgreSQL custom database dump
-  sha256sum "$dump"                                      # compare to the local original
-  rm -rf "$tgt"
-done
+scripts/offsite-restore-drill.sh                # drill from the B2 primary
+scripts/offsite-restore-drill.sh --repo gdrive  # drill from the Drive repo
+scripts/offsite-restore-drill.sh --keep         # leave the temp DB for inspection
 ```
 
-Then exercise an actual import against a disposable target per
-`BACKUP-RESTORE.md` § Pre-Release Restore Drill. Record evidence and clean up
-scratch dirs.
+It pulls the newest snapshot from the chosen off-site repo, restores the newest
+dump into an **isolated temporary database** (`restore_drill_<ts>`, owned by the
+game user) inside the live Postgres pod, runs schema/row sanity counts, then
+drops the temp DB and removes the staged dump (cleanup runs even on failure via
+an EXIT trap). It never touches the live `dune` database and never creates a
+second BattleGroup (which would collide on NodePorts). Evidence is written to
+`~/dune-server/logs/offsite-restore-drill-<ts>.log`.
+
+This is the layer the byte-fidelity check can't prove: that the off-site dump
+restores into a real PostgreSQL and yields a sane game schema. (The host has no
+`pg_restore`; the drill runs it inside the pod where it lives.)
+
+**Verified 2026-06-24** — both repos passed: `pg_restore` clean, 161 base
+tables / 590 routines, `dune.world_partition` 30 rows, `dune.farm_state` 4 rows,
+temp DB dropped, no residue. For a *full* game-level rehearsal (browser
+visibility, character load, travel), import into a disposable BattleGroup per
+`BACKUP-RESTORE.md` § Pre-Release Restore Drill.
 
 ## Threat-model summary
 

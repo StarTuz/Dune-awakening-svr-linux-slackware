@@ -353,11 +353,14 @@ Both `scripts/map-toggle.sh` and `dune-ctl/core/src/maps.rs` were updated so `st
   Backblaze B2 (bucket `dune-backups-offsite`, 30-day Governance Object Lock,
   immutable) + Google Drive (`drive.file` scope) — both encrypted with one
   escrowed master passphrase (`~/.dune/offsite-restic-pass`, in password manager
-  + printed). `restic check` clean on both; restore drill byte-identical from
-  each. Nightly cron 03:20 + weekly check Sun 04:30. `restic` 0.19.0 / `rclone`
-  1.74.3 in `~/.local/bin`. Switched the Drive leg from `rclone copy`+crypt to a
-  second restic repo after rclone 1.74.3 `copy` hit an intermittent `fs/cache`
-  panic unsafe for unattended cron.
+  + printed). `restic check` clean on both. End-to-end import drill
+  (`scripts/offsite-restore-drill.sh`) passed from **both** repos 2026-06-24:
+  pulls newest snapshot → `pg_restore` into an isolated temp DB in the live
+  Postgres pod → 161 tables / 590 routines, `dune.world_partition` 30 /
+  `dune.farm_state` 4 → temp DB dropped, no residue. Nightly cron 03:20 + weekly
+  check Sun 04:30. `restic` 0.19.0 / `rclone` 1.74.3 in `~/.local/bin`. Switched
+  the Drive leg from `rclone copy`+crypt to a second restic repo after rclone
+  1.74.3 `copy` hit an intermittent `fs/cache` panic unsafe for unattended cron.
 - [ ] Create `settings.conf` (`printf '\n\n\n47.145.31.211\n' > ~/.dune/settings.conf`) — cosmetic, no known runtime failures
 - [ ] **Rotate FLS token before 2027-04-19** (expires 2027-05-19) — update BattleGroup CR args (28 occurrences) + re-apply gateway patch
 - [ ] **Set sietch password before official launch** — no password is set (fine for PTC; FLS browser not widely used yet). At official release the server is publicly visible to all players. Set with `dune-ctl settings set sietch_password <password> && dune-ctl settings apply` before going live on the official world.

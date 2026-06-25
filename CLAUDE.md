@@ -151,6 +151,7 @@ newer k3s may already support cleaner approaches.
 | `db-credentials.sh` | Postgres credential guard; discovers the live DB port from the DatabaseDeployment/service and repairs drifted passwords |
 | `dune-backup.sh` | Host-side bundle: Funcom `DatabaseOperation` DB dump + Kubernetes metadata + UserSettings into `/srv/backups/dune/<env>/<battlegroup>/` |
 | `offsite-sync.sh` | Replicate `live/` bundles off-server to two restic repos via rclone: Backblaze B2 (Object Lock immutable) + Google Drive. Config in `~/.dune/offsite.env`. Nightly cron + weekly check. See `OFFSITE-BACKUP.md` |
+| `offsite-restore-drill.sh` | End-to-end off-site restore proof: pull newest snapshot from a repo, `pg_restore` into an isolated temp DB in the live Postgres pod, sanity-count, drop. Non-destructive. `--repo <f>`, `--keep`. See `OFFSITE-BACKUP.md` |
 | `system-snapshot.sh` | Full btrfs snapshot of root + backup volume (run as root) |
 | `resource-snapshot.sh` | Capture host + cluster resource state (RSS, requests/limits, pod placement) into `/srv/backups/dune/resource-snapshots/` |
 | `world-capsules.sh` | Inventory and activate cold-swappable world capsules (PTC/Live) |
