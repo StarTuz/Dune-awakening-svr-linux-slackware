@@ -47,7 +47,19 @@ scripts/world-capsules.sh create --env live \
   --name "<World Title>" \
   --sietch-name "<Sietch Name>" \
   --token "<world#2 token>"
+
+# Then seed a per-world settings profile so live settings are isolated (see below):
+dune-ctl --world <new-bg> settings init
 ```
+
+> **Why `settings init`:** `create` seeds the *capsule's* `UserSettings/` (with
+> the unique `Bgd.ServerDisplayName`), which is what deploys on activation. But
+> the `dune-ctl settings` editing layer keys off `~/.dune/worlds/<bg>/UserSettings/`
+> and falls back to a **shared** repo default when that dir is absent — so a
+> freshly `create`d world shows `shared` in `worlds list` until `settings init`
+> (or `settings pull` after deploy) gives it its own `profile`. Ixware is already
+> `profile`; do this so world #2 matches and its live settings edits stay
+> world-local.
 
 **Then, to actually swap + transfer:**
 1. `dune-ctl worlds swap <new-bg>` (or `world-capsules.sh swap --to <new-bg> --apply`)
@@ -218,9 +230,17 @@ Script-first in `world-capsules.sh`, then wire into `dune-ctl`.
    tab (`1`) swap action with confirmation still TODO. `token-check --world <bg>`
    already tracks each world's expiry independently.
 
-6. **Per-world everything is already isolated** by namespace + capsule:
-   backups (`/srv/backups/dune/live/<bg>/`), UserSettings
-   (`~/.dune/worlds/<bg>/`), FLS/RMQ secrets, settings drift.
+6. **Per-world everything is isolated** by namespace + capsule: the Postgres DB
+   (all game/character/base state), FLS/RMQ secrets + DB passwords, BattleGroup
+   CR, backups (`/srv/backups/dune/live/<bg>/`), and settings. Settings have two
+   layers: the capsule's `UserSettings/` (rendered per world at `create`, carries
+   the unique `Bgd.ServerDisplayName`, deploys on activation) and the `dune-ctl
+   settings` editing profile at `~/.dune/worlds/<bg>/UserSettings/`. The editing
+   profile is per-world **once seeded** — a freshly `create`d world falls back to
+   the shared repo default until `dune-ctl --world <bg> settings init` (shows
+   `shared` vs `profile` in `worlds list`). Host-level resources are deliberately
+   shared (single-active): k3s, the 4 operators, scheduler, package root/images,
+   public IP, UDP 7782-7790.
 
 Generalizes to N worlds (N characters) — nothing above is two-specific.
 
