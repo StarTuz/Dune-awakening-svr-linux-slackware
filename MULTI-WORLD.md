@@ -1,15 +1,63 @@
 # Multi-World (Hot-Swap) Design
 
-Status: **Swap machinery implemented (2026-07-07); awaiting world #2.** The
-hot-swap mechanism (`park`/`swap` in `world-capsules.sh`, wired into `dune-ctl`)
-is built and dry-run verified against the live cluster. What remains is standing
-up the second world itself: a new FLS token (six-letter suffix), a `create`d
-capsule, and the in-client character transfer. This captures the plan for
-running more than one Live world/battlegroup on Arrakis so a separate character
-can live on its own world.
+Status: **Swap machinery implemented (2026-07-07); world #2 ready to render,
+blocked only on naming.** The hot-swap mechanism (`park`/`swap` in
+`world-capsules.sh`, wired into `dune-ctl`, plus nightly-backup `--retarget`) is
+built and dry-run verified against the live cluster. The world #2 FLS token is in
+hand and every prerequisite is checked (see *Provisioning status* below); the
+only remaining input is the operator's chosen world title / sietch name. This
+captures the plan for running more than one Live world/battlegroup on Arrakis so
+a separate character can live on its own world.
 
 Related docs: `WORLD-CAPSULES.md` (the cold-swap capsule model this extends),
 `CLAUDE.md` (host/cluster facts), `BACKUP-RESTORE.md`, `OFFSITE-BACKUP.md`.
+
+---
+
+## Provisioning status (world #2)
+
+Snapshot as of **2026-07-07**. Resume here after names are chosen.
+
+**Verified / ready:**
+- **FLS token in hand** — decoded OK: `HostId=DB3533A2D5A25FB` (matches this
+  host, lowercased to `sh-db3533a2d5a25fb-…`), `TokenIndex=2` (distinct slot from
+  Ixware, so it is a separate world credential), `ServiceHostType=2`,
+  **expires 2027-07-07** (rotate by ~2027-06-07). Held out-of-repo; it lands only
+  in the chmod-600 capsule secret when `create` runs — never committed.
+- **Live package root exists** — `/home/dune/dune-packages/live/app-4754530/server`
+  (same live package/images as Ixware, so `images load`/`verify` are already
+  satisfied — no re-import needed for a same-version world).
+- **World-id generation confirmed** — `create` auto-derives
+  `sh-db3533a2d5a25fb-<6 random lowercase letters>` (`token_host_id` lowercases;
+  suffix is six letters, never numeric).
+- **`create` is non-destructive** — renders capsule files only (battlegroup +
+  fls/rmq secrets, `capsule.env`, UserSettings), chmod 600; applies nothing to
+  Kubernetes.
+- **Backup story closed** — storage is per-`<bg>`; nightly cron follows the
+  active world via swap `--retarget`; off-site sweeps the whole `live/` tree.
+- **Character transfer mechanics confirmed against the live client** (see runbook
+  below) — no "accept incoming transfers" setting is needed.
+
+**Blocked on operator decision:**
+- World **title** and **sietch name** for world #2.
+
+**Resume command** (fill in the names; suffix auto-generates):
+```sh
+scripts/world-capsules.sh create --env live \
+  --name "<World Title>" \
+  --sietch-name "<Sietch Name>" \
+  --token "<world#2 token>"
+```
+
+**Then, to actually swap + transfer:**
+1. `dune-ctl worlds swap <new-bg>` (or `world-capsules.sh swap --to <new-bg> --apply`)
+   — parks Ixware (backup + namespace delete) and brings world #2 online. Ixware
+   goes cold; its main character is untouched (backed up, restorable via a
+   swap-back). Only one world is online at a time — this is the hot-swap tradeoff.
+2. Wait ~5–10 min for FLS re-declaration so world #2 is **browser-visible**.
+3. In-client: transfer the G-Portal character into world #2 (Transfer button is
+   enabled for it; see runbook). Rebuild base/vehicles on arrival.
+4. `dune-ctl --world <new-bg> preflight | status | players` to verify.
 
 ---
 
@@ -220,12 +268,18 @@ client before spending a token — some of this is version-specific.
    new world online; wait for FLS re-declaration (~5–10 min) so it is
    **browser-visible** — the destination must appear in the in-client server
    list to be selectable.
-3. Verify/enable the self-host "accept incoming transfers" setting. It lives in
-   the `UserSettings` / Director layer (exact INI key TBD — confirm against the
-   live `dune-ctl settings` catalog at build time).
+3. **No "accept incoming transfers" setting is needed.** Verified in the live
+   client (2026-07-07): with a G-Portal character selected in the transfer UI,
+   our self-hosted worlds already **enable the Transfer button** — incoming
+   transfers are accepted by default. (Selecting Ixware instead greys the button
+   with "character already exists", confirming the one-char-per-world rule and
+   that the destination must be a *different* world.) No INI key, no Director
+   change.
 4. On G-Portal: back up base + vehicles; stash valuables in inventory/bank.
-5. In-client: be in **Hagga Basin** → **Servers** tab → press **Z** → select
-   the new self-hosted world → confirm. The character + inventory move in.
+5. In-client transfer UI: select the G-Portal character, pick the destination
+   world from the list, and press **Transfer** (enabled only for a browser-
+   visible world that does not already hold this account's character — i.e.
+   world #2 once swapped online). The character + inventory + bank move in.
 6. Rebuild base/vehicles on Arrakis. Verify with `dune-ctl --world <bg2>`
    `preflight` / `status` / `players`.
 
@@ -239,8 +293,9 @@ client before spending a token — some of this is version-specific.
 
 ## Open items before implementation
 
-- Confirm the exact self-host **"allow incoming transfers" UserSettings key**
-  against the live server (may already be in the `dune-ctl settings` catalog).
+- ~~Confirm the self-host "allow incoming transfers" key~~ — **resolved
+  (2026-07-07)**: no such setting needed; self-hosted worlds accept incoming
+  transfers by default (Transfer button enables in the live client).
 - Confirm `world-capsules.sh` inventory/activate has no hidden single-`live`
   assumption.
 - Decide the **swap UX** surface: CLI verb name (`worlds swap`?), TUI binding,
