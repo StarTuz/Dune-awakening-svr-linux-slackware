@@ -1,13 +1,13 @@
 # Multi-World (Hot-Swap) Design
 
-Status: **Swap machinery implemented (2026-07-07); world #2 ready to render,
-blocked only on naming.** The hot-swap mechanism (`park`/`swap` in
-`world-capsules.sh`, wired into `dune-ctl`, plus nightly-backup `--retarget`) is
-built and dry-run verified against the live cluster. The world #2 FLS token is in
-hand and every prerequisite is checked (see *Provisioning status* below); the
-only remaining input is the operator's chosen world title / sietch name. This
-captures the plan for running more than one Live world/battlegroup on Arrakis so
-a separate character can live on its own world.
+Status: **Swap machinery implemented + world #2 capsule created (2026-07-08).**
+The hot-swap mechanism (`park`/`swap` in `world-capsules.sh`, wired into
+`dune-ctl` CLI + TUI, plus nightly-backup `--retarget`) is built and dry-run
+verified against the live cluster. World #2 `SlackSalusa`
+(`sh-db3533a2d5a25fb-xfrcer`) is rendered cold; remaining work is the live swap +
+in-client character transfer (see *Provisioning status* below). This captures the
+plan for running more than one Live world/battlegroup on Arrakis so a separate
+character can live on its own world.
 
 Related docs: `WORLD-CAPSULES.md` (the cold-swap capsule model this extends),
 `CLAUDE.md` (host/cluster facts), `BACKUP-RESTORE.md`, `OFFSITE-BACKUP.md`.
@@ -16,60 +16,56 @@ Related docs: `WORLD-CAPSULES.md` (the cold-swap capsule model this extends),
 
 ## Provisioning status (world #2)
 
-Snapshot as of **2026-07-07**. Resume here after names are chosen.
+**World #2 capsule created 2026-07-08** — `SlackSalusa`
+(`sh-db3533a2d5a25fb-xfrcer`), Sietch `Sietch Cielago`, region North America.
+Rendered cold (nothing applied to Kubernetes); it appears in `worlds list` as
+`cold` / `profile`. Remaining work is the live swap + in-client character
+transfer, on the operator's schedule.
 
-**Verified / ready:**
-- **FLS token in hand** — decoded OK: `HostId=DB3533A2D5A25FB` (matches this
-  host, lowercased to `sh-db3533a2d5a25fb-…`), `TokenIndex=2` (distinct slot from
-  Ixware, so it is a separate world credential), `ServiceHostType=2`,
-  **expires 2027-07-07** (rotate by ~2027-06-07). Held out-of-repo; it lands only
-  in the chmod-600 capsule secret when `create` runs — never committed.
-- **Live package root exists** — `/home/dune/dune-packages/live/app-4754530/server`
-  (same live package/images as Ixware, so `images load`/`verify` are already
-  satisfied — no re-import needed for a same-version world).
-- **World-id generation confirmed** — `create` auto-derives
-  `sh-db3533a2d5a25fb-<6 random lowercase letters>` (`token_host_id` lowercases;
-  suffix is six letters, never numeric).
-- **`create` is non-destructive** — renders capsule files only (battlegroup +
-  fls/rmq secrets, `capsule.env`, UserSettings), chmod 600; applies nothing to
-  Kubernetes.
+**Done:**
+- **FLS token** — decoded OK: `HostId=DB3533A2D5A25FB`, `TokenIndex=2` (distinct
+  slot from Ixware), `ServiceHostType=2`, **expires 2027-07-07** (rotate by
+  ~2027-06-07). Lives only in the chmod-600 capsule `fls-secret.yaml` — never
+  committed.
+- **Capsule rendered** — `~/.dune/capsules/live/sh-db3533a2d5a25fb-xfrcer/`
+  (battlegroup + fls/rmq secrets, `capsule.env`, UserSettings), package root
+  shared with Ixware (`app-4754530`), `host_ip=47.145.31.211`,
+  `Bgd.ServerDisplayName="Sietch Cielago"`.
+- **Per-world settings profile seeded** — `worlds init-settings` created
+  `~/.dune/worlds/sh-db3533a2d5a25fb-xfrcer/UserSettings/` from the capsule (so
+  it carries "Sietch Cielago", not the generic default). World shows `profile`.
 - **Backup story closed** — storage is per-`<bg>`; nightly cron follows the
   active world via swap `--retarget`; off-site sweeps the whole `live/` tree.
 - **Character transfer mechanics confirmed against the live client** (see runbook
   below) — no "accept incoming transfers" setting is needed.
 
-**Blocked on operator decision:**
-- World **title** and **sietch name** for world #2.
-
-**Resume command** (fill in the names; suffix auto-generates):
+**Command used** (recorded for the next world; `--region` is required
+non-interactively, `--host-ip` sets the advertised public IP, `--force
+--world-id` overwrites in place):
 ```sh
 scripts/world-capsules.sh create --env live \
-  --name "<World Title>" \
-  --sietch-name "<Sietch Name>" \
-  --token "<world#2 token>"
+  --name "SlackSalusa" \
+  --sietch-name "Sietch Cielago" \
+  --region "North America" \
+  --host-ip "47.145.31.211" \
+  --token-file <chmod-600 token file>
 
-# Then seed a per-world settings profile so live settings are isolated (see below):
-dune-ctl --world <new-bg> settings init
+# Seed the per-world settings profile (sources the capsule's UserSettings, so the
+# profile keeps the per-world display name and a later `settings apply` won't
+# clobber it with the shared default):
+dune-ctl --world SlackSalusa worlds init-settings
 ```
 
-> **Why `settings init`:** `create` seeds the *capsule's* `UserSettings/` (with
-> the unique `Bgd.ServerDisplayName`), which is what deploys on activation. But
-> the `dune-ctl settings` editing layer keys off `~/.dune/worlds/<bg>/UserSettings/`
-> and falls back to a **shared** repo default when that dir is absent — so a
-> freshly `create`d world shows `shared` in `worlds list` until `settings init`
-> (or `settings pull` after deploy) gives it its own `profile`. Ixware is already
-> `profile`; do this so world #2 matches and its live settings edits stay
-> world-local.
-
-**Then, to actually swap + transfer:**
-1. `dune-ctl worlds swap <new-bg>` (or `world-capsules.sh swap --to <new-bg> --apply`)
-   — parks Ixware (backup + namespace delete) and brings world #2 online. Ixware
-   goes cold; its main character is untouched (backed up, restorable via a
-   swap-back). Only one world is online at a time — this is the hot-swap tradeoff.
-2. Wait ~5–10 min for FLS re-declaration so world #2 is **browser-visible**.
-3. In-client: transfer the G-Portal character into world #2 (Transfer button is
-   enabled for it; see runbook). Rebuild base/vehicles on arrival.
-4. `dune-ctl --world <new-bg> preflight | status | players` to verify.
+**Remaining — swap + transfer (operator's schedule):**
+1. `dune-ctl worlds swap SlackSalusa` (or the TUI Worlds tab, `S`; or
+   `world-capsules.sh swap --to sh-db3533a2d5a25fb-xfrcer --apply`)
+   — parks Ixware (backup + namespace delete) and brings SlackSalusa online.
+   Ixware goes cold; its main character is untouched (backed up, restorable via a
+   swap-back). Only one world is online at a time — the hot-swap tradeoff.
+2. Wait ~5–10 min for FLS re-declaration so SlackSalusa is **browser-visible**.
+3. In-client: transfer the G-Portal character into SlackSalusa (Transfer button
+   is enabled for it; see runbook). Rebuild base/vehicles on arrival.
+4. `dune-ctl --world SlackSalusa preflight | status | players` to verify.
 
 ---
 
@@ -238,8 +234,9 @@ Script-first in `world-capsules.sh`, then wire into `dune-ctl`.
    the unique `Bgd.ServerDisplayName`, deploys on activation) and the `dune-ctl
    settings` editing profile at `~/.dune/worlds/<bg>/UserSettings/`. The editing
    profile is per-world **once seeded** — a freshly `create`d world falls back to
-   the shared repo default until `dune-ctl --world <bg> settings init` (shows
-   `shared` vs `profile` in `worlds list`). Host-level resources are deliberately
+   the shared repo default until `dune-ctl --world <bg> worlds init-settings`
+   (which seeds from the capsule's UserSettings; shows `shared` vs `profile` in
+   `worlds list`). Host-level resources are deliberately
    shared (single-active): k3s, the 4 operators, scheduler, package root/images,
    public IP, UDP 7782-7790.
 

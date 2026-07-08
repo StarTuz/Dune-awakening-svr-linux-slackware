@@ -222,7 +222,7 @@ token_host_id() {
 
 generate_world_id() {
     local token="$1"
-    local host_id suffix
+    local host_id suffix=""
     host_id="$(token_host_id "$token")"
     [ -n "$host_id" ] || die "token does not contain HostId"
     while [ "${#suffix}" -lt 6 ]; do
@@ -1102,7 +1102,13 @@ create_capsule() {
         steam_build=""
         steam_name=""
     fi
-    if [ "$env" = "live" ] && [ -f "$package_root/steamapps/appmanifest_$DEFAULT_PTC_APP_ID.acf" ]; then
+    # Refuse only a genuinely PTC-only root: a PTC manifest with no live manifest
+    # alongside it. A valid live root may also carry a stray PTC manifest (steamapps
+    # accumulates appmanifests) — Ixware's own live root does — so the live manifest
+    # being present is the authoritative signal that live content is installed here.
+    if [ "$env" = "live" ] \
+        && [ -f "$package_root/steamapps/appmanifest_$DEFAULT_PTC_APP_ID.acf" ] \
+        && [ ! -f "$package_root/steamapps/appmanifest_$DEFAULT_LIVE_APP_ID.acf" ]; then
         die "refusing to create live capsule from PTC package root: $package_root"
     fi
 
