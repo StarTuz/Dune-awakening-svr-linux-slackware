@@ -6,7 +6,7 @@ use dune_ctl_core::{
     diagnostics::CheckState,
     fls::{self, FlsTokenState},
     health::HealthSnapshot,
-    logs, maintenance, maps, players, public_ip, settings, sietches, update,
+    kubectl, logs, maintenance, maps, players, public_ip, settings, sietches, update,
 };
 
 const DUNE_GAME_PORT_MIN: u16 = 7782;
@@ -112,6 +112,20 @@ pub enum WorldsCommand {
     List,
     /// Create a per-world local UserSettings profile for the selected world
     InitSettings,
+    /// Hot-swap the active Live world for another (parks active, activates target)
+    Swap {
+        /// Target world: battlegroup id or title (e.g. Ixware)
+        world: String,
+        /// Capsule environment
+        #[arg(long, default_value = "live")]
+        env: String,
+        /// Actually perform the swap; without it, prints the plan only
+        #[arg(long)]
+        apply: bool,
+        /// Skip the parked world's final backup (not recommended)
+        #[arg(long)]
+        skip_backup: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -220,6 +234,36 @@ pub enum CapsulesCommand {
         /// Allow apply while other battlegroups exist
         #[arg(long)]
         force: bool,
+    },
+    /// Dry-run or apply a park of a world (stop, backup, delete namespace)
+    Park {
+        /// Capsule environment
+        #[arg(long, default_value = "live")]
+        env: String,
+        /// Battlegroup id of the world to park
+        #[arg(long)]
+        world_id: String,
+        /// Stop, back up, and delete the namespace
+        #[arg(long)]
+        apply: bool,
+        /// Skip the final backup (not recommended)
+        #[arg(long)]
+        skip_backup: bool,
+    },
+    /// Hot-swap the active Live world for another capsule
+    Swap {
+        /// Capsule environment
+        #[arg(long, default_value = "live")]
+        env: String,
+        /// Target capsule battlegroup id to activate
+        #[arg(long)]
+        to: String,
+        /// Park the active world and activate the target
+        #[arg(long)]
+        apply: bool,
+        /// Skip the parked world's final backup
+        #[arg(long)]
+        skip_backup: bool,
     },
 }
 
@@ -462,6 +506,10 @@ pub enum BackupCommand {
         /// Remove the scheduled backup job
         #[arg(long)]
         remove: bool,
+        /// Re-point the installed schedule at the current --world, preserving
+        /// its cron/keep/offsite settings (used by capsule swap; no-op if none)
+        #[arg(long)]
+        retarget: bool,
         /// Cron schedule expression (default: 3am daily)
         #[arg(long, default_value = "0 3 * * *")]
         cron: String,
@@ -741,13 +789,17 @@ async fn cmd_worlds(action: WorldsCommand, cfg: &Config) -> Result<()> {
                 println!("No world specs found in ~/.dune.");
                 return Ok(());
             }
+            // Query which battlegroups are actually online so the list can mark
+            // online vs cold — the useful signal in a hot-swap setup where only
+            // one Live world runs at a time.
+            let online = online_battlegroups().await;
             println!(
-                "{:<3} {:<30} {:<22} {:<9} Spec",
-                "", "Battlegroup", "Title", "Settings"
+                "{:<3} {:<30} {:<22} {:<8} {:<9} Spec",
+                "", "Battlegroup", "Title", "State", "Settings"
             );
-            println!("{}", "-".repeat(102));
+            println!("{}", "-".repeat(108));
             for world in worlds {
-                print_world_row(cfg, &world);
+                print_world_row(cfg, &world, &online);
             }
         }
         WorldsCommand::InitSettings => {
@@ -759,21 +811,72 @@ async fn cmd_worlds(action: WorldsCommand, cfg: &Config) -> Result<()> {
             );
             print_target_summary(cfg);
         }
+        WorldsCommand::Swap {
+            world,
+            env,
+            apply,
+            skip_backup,
+        } => {
+            // Resolve title-or-id to a battlegroup id via the known worlds.
+            let target = Config::discover_worlds()?
+                .into_iter()
+                .find(|w| {
+                    w.battlegroup.eq_ignore_ascii_case(&world)
+                        || w.title
+                            .as_deref()
+                            .is_some_and(|t| t.eq_ignore_ascii_case(&world))
+                })
+                .map(|w| w.battlegroup)
+                .unwrap_or(world);
+            let mut args = vec![
+                "swap".to_string(),
+                "--env".to_string(),
+                env,
+                "--to".to_string(),
+                target,
+            ];
+            if apply {
+                args.push("--apply".to_string());
+            }
+            if skip_backup {
+                args.push("--skip-backup".to_string());
+            }
+            capsules::run_stream(cfg, &args).await?;
+        }
     }
     Ok(())
 }
 
-fn print_world_row(cfg: &Config, world: &WorldProfile) {
-    let active = if world.battlegroup == cfg.battlegroup {
+/// Battlegroup ids with a running BattleGroup CR, or an empty set if the cluster
+/// is unreachable (so `worlds list` still works offline, just without state).
+async fn online_battlegroups() -> std::collections::HashSet<String> {
+    match kubectl::run(&["get", "battlegroups", "-A", "--no-headers"]).await {
+        Ok(out) => out
+            .lines()
+            .filter_map(|l| l.split_whitespace().nth(1))
+            .map(str::to_string)
+            .collect(),
+        Err(_) => std::collections::HashSet::new(),
+    }
+}
+
+fn print_world_row(cfg: &Config, world: &WorldProfile, online: &std::collections::HashSet<String>) {
+    let target = if world.battlegroup == cfg.battlegroup {
         "*"
     } else {
         ""
     };
+    let state = if online.contains(&world.battlegroup) {
+        "online"
+    } else {
+        "cold"
+    };
     println!(
-        "{:<3} {:<30} {:<22} {:<9} {}",
-        active,
+        "{:<3} {:<30} {:<22} {:<8} {:<9} {}",
+        target,
         world.battlegroup,
         world.title.as_deref().unwrap_or("—"),
+        state,
         if world_settings_dir(&world.battlegroup).exists() {
             "profile"
         } else {
@@ -1306,6 +1409,48 @@ async fn cmd_capsules(action: CapsulesCommand, cfg: &Config) -> Result<()> {
             }
             if force {
                 args.push("--force".to_string());
+            }
+            capsules::run_stream(cfg, &args).await?;
+        }
+        CapsulesCommand::Park {
+            env,
+            world_id,
+            apply,
+            skip_backup,
+        } => {
+            let mut args = vec![
+                "park".to_string(),
+                "--env".to_string(),
+                env,
+                "--world-id".to_string(),
+                world_id,
+            ];
+            if apply {
+                args.push("--apply".to_string());
+            }
+            if skip_backup {
+                args.push("--skip-backup".to_string());
+            }
+            capsules::run_stream(cfg, &args).await?;
+        }
+        CapsulesCommand::Swap {
+            env,
+            to,
+            apply,
+            skip_backup,
+        } => {
+            let mut args = vec![
+                "swap".to_string(),
+                "--env".to_string(),
+                env,
+                "--to".to_string(),
+                to,
+            ];
+            if apply {
+                args.push("--apply".to_string());
+            }
+            if skip_backup {
+                args.push("--skip-backup".to_string());
             }
             capsules::run_stream(cfg, &args).await?;
         }
@@ -2356,11 +2501,12 @@ async fn cmd_backup(action: BackupCommand, cfg: &Config) -> Result<()> {
         BackupCommand::Schedule {
             show,
             remove,
+            retarget,
             cron,
             keep,
             offsite,
         } => {
-            cmd_schedule(show, remove, &cron, keep, offsite, cfg)?;
+            cmd_schedule(show, remove, retarget, &cron, keep, offsite, cfg)?;
         }
         BackupCommand::Restore { bundle, yes } => {
             if !yes {
@@ -2421,6 +2567,7 @@ async fn cmd_players(cfg: &Config) -> Result<()> {
 fn cmd_schedule(
     show: bool,
     remove: bool,
+    retarget: bool,
     cron: &str,
     keep: usize,
     offsite: bool,
@@ -2447,6 +2594,35 @@ fn cmd_schedule(
     let bin = std::env::current_exe().unwrap_or_else(|_| {
         std::path::PathBuf::from("/home/dune/dune-server/dune-ctl/target/release/dune-ctl")
     });
+
+    // Re-point an existing schedule at the current world without disturbing its
+    // cron/keep/offsite settings. Used by capsule swap so the nightly job always
+    // follows the active world. Silent no-op when nothing is installed, so it is
+    // safe to call unconditionally after any swap.
+    if retarget {
+        match backup::read_schedule() {
+            Some(info) => {
+                backup::write_schedule(
+                    &cfg.battlegroup,
+                    &bin.to_string_lossy(),
+                    &info.cron,
+                    info.keep,
+                    info.offsite,
+                )?;
+                println!(
+                    "Backup schedule retargeted to world {} (cron '{}', keep {}, off-site {}).",
+                    cfg.battlegroup,
+                    info.cron,
+                    info.keep,
+                    if info.offsite { "yes" } else { "no" }
+                );
+            }
+            None => {
+                println!("No dune-ctl backup schedule installed; nothing to retarget.");
+            }
+        }
+        return Ok(());
+    }
     backup::write_schedule(
         &cfg.battlegroup,
         &bin.to_string_lossy(),

@@ -29,6 +29,8 @@ Commands:
   images load [options]             Import package images into k3s/containerd
   images verify [options]           Verify package images are registered in k3s/containerd
   activate [options]                Dry-run or apply a rendered capsule
+  park [options]                    Dry-run or apply a park of the active world
+  swap [options]                    Hot-swap the active Live world for another capsule
   -h, --help                        Show this help
 
 Create options:
@@ -65,6 +67,18 @@ Activate options:
   --world-id NAME                   Capsule battlegroup id
   --apply                           Apply namespace, secrets, and BattleGroup
   --force                           Allow apply while other battlegroups exist
+
+Park options:
+  --env ptc|live                    Capsule environment (default: live)
+  --world-id NAME                   Battlegroup id of the world to park
+  --apply                           Stop, back up, and delete the namespace
+  --skip-backup                     Skip the final backup (not recommended)
+
+Swap options:
+  --env ptc|live                    Capsule environment (default: live)
+  --to NAME                         Target capsule battlegroup id to activate
+  --apply                           Park the active world and activate the target
+  --skip-backup                     Skip the parked world's final backup
 EOF
 }
 
@@ -725,6 +739,215 @@ activate_capsule() {
     echo "Capsule applied. Watch with: sudo kubectl get battlegroups -A"
 }
 
+# Wait for all game server pods (role=igw-server) in a namespace to terminate.
+# These are the map pods owned by the ServerSet CR; waiting for them to drain
+# before backup gives a consistent DB dump (the servers have flushed state).
+wait_game_pods_gone() {
+    local ns="$1"
+    local timeout="${2:-300}"
+    local waited=0
+    while true; do
+        local count
+        count="$(sudo_capsule kubectl get pods -n "$ns" -l role=igw-server \
+            --no-headers 2>/dev/null | awk 'NF {c++} END {print c+0}')"
+        if [ "$count" -eq 0 ]; then
+            echo "  game server pods drained"
+            return 0
+        fi
+        if [ "$waited" -ge "$timeout" ]; then
+            echo "  WARNING: $count game server pod(s) still present after ${timeout}s" >&2
+            return 1
+        fi
+        echo "  waiting for $count game server pod(s) to terminate (${waited}s)..."
+        sleep 10
+        waited=$((waited + 10))
+    done
+}
+
+# Park the active world: stop the battlegroup, wait for game pods to drain,
+# take a final env+bg-stamped backup, export namespace evidence, and only then
+# delete the namespace. Capsule files and backups remain on disk. Dry-run by
+# default; pass --apply to mutate the cluster.
+park_capsule() {
+    local env="live"
+    local world_id=""
+    local apply=0
+    local skip_backup=0
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --env)
+                env="${2:-}"
+                shift 2
+                ;;
+            --world-id|--world)
+                world_id="${2:-}"
+                shift 2
+                ;;
+            --apply)
+                apply=1
+                shift
+                ;;
+            --skip-backup)
+                skip_backup=1
+                shift
+                ;;
+            *)
+                die "unknown park option: $1"
+                ;;
+        esac
+    done
+
+    validate_env "$env"
+    [ -n "$world_id" ] || die "--world-id is required"
+    local ns="$BATTLEGROUP_PREFIX$world_id"
+
+    echo "Park plan:"
+    echo "  env=$env"
+    echo "  world_id=$world_id"
+    echo "  namespace=$ns"
+    echo "  backup=$([ "$skip_backup" -eq 1 ] && echo skip || echo yes)"
+    echo "  steps: stop -> drain game pods -> backup -> export -> delete namespace"
+
+    if ! sudo_capsule kubectl get ns "$ns" >/dev/null 2>&1; then
+        echo
+        echo "Namespace $ns does not exist; nothing to park."
+        return 0
+    fi
+
+    if [ "$apply" -ne 1 ]; then
+        echo
+        echo "Dry run only. Re-run with --apply to stop, back up, and delete the namespace."
+        return 0
+    fi
+
+    section "Stopping battlegroup $world_id"
+    sudo_capsule kubectl patch battlegroup "$world_id" -n "$ns" \
+        --type=merge -p '{"spec":{"stop":true}}'
+
+    section "Draining game server pods"
+    wait_game_pods_gone "$ns" || die "game server pods did not drain; refusing to park"
+
+    if [ "$skip_backup" -ne 1 ]; then
+        section "Final backup ($env/$world_id)"
+        "$REPO_ROOT/scripts/dune-backup.sh" --env "$env" --bg "$world_id" \
+            || die "backup failed; refusing to delete namespace $ns"
+    fi
+
+    section "Exporting namespace evidence"
+    local export_dir="$CAPSULE_ROOT/$env/$world_id/exports/$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$export_dir"
+    sudo_capsule kubectl get all,pvc,secret,battlegroup,serverset,messagequeue \
+        -n "$ns" -o yaml > "$export_dir/namespace.yaml" 2>/dev/null || true
+    echo "  wrote $export_dir/namespace.yaml"
+
+    section "Deleting namespace $ns"
+    sudo_capsule kubectl delete ns "$ns" --wait=true
+    echo "Parked $world_id: namespace removed; capsule files and backups retained."
+}
+
+# Hot-swap the active Live world for another capsule. Parks whichever world is
+# currently online (backup + namespace teardown), then activates the target.
+# Enforces the single-active invariant: exactly one Live world online at a time.
+swap_capsule() {
+    local env="live"
+    local target=""
+    local apply=0
+    local skip_backup=0
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --env)
+                env="${2:-}"
+                shift 2
+                ;;
+            --to|--world|--world-id)
+                target="${2:-}"
+                shift 2
+                ;;
+            --apply)
+                apply=1
+                shift
+                ;;
+            --skip-backup)
+                skip_backup=1
+                shift
+                ;;
+            *)
+                die "unknown swap option: $1"
+                ;;
+        esac
+    done
+
+    validate_env "$env"
+    [ -n "$target" ] || die "--to <battlegroup> is required"
+
+    # Validate the target capsule exists before touching the live world.
+    local target_dir
+    target_dir="$(resolve_capsule_dir "$env" "$target")"
+
+    local active_list active_count
+    active_list="$(active_battlegroups || true)"
+    active_count="$(printf '%s\n' "$active_list" | awk 'NF {count++} END {print count+0}')"
+
+    # Refuse if the target is already the active world.
+    if printf '%s\n' "$active_list" | grep -qx "$target"; then
+        die "target $target is already active; nothing to swap"
+    fi
+
+    echo "Swap plan:"
+    echo "  env=$env"
+    echo "  target=$target ($target_dir)"
+    if [ "$active_count" -gt 0 ]; then
+        echo "  park_active=$(printf '%s' "$active_list" | tr '\n' ' ')"
+    else
+        echo "  park_active=none (no world currently online)"
+    fi
+    echo "  steps: park active world(s) -> activate target -> FLS re-declare -> preflight"
+
+    if [ "$apply" -ne 1 ]; then
+        echo
+        echo "Dry run only. Re-run with --apply to perform the swap."
+        return 0
+    fi
+
+    # Park every currently-active world so the target activates into a clean host.
+    local bg
+    while IFS= read -r bg; do
+        [ -n "$bg" ] || continue
+        section "Parking active world $bg"
+        local park_args=(--env "$env" --world-id "$bg" --apply)
+        [ "$skip_backup" -eq 1 ] && park_args+=(--skip-backup)
+        park_capsule "${park_args[@]}"
+    done <<EOF
+$active_list
+EOF
+
+    section "Activating target $target"
+    activate_capsule --env "$env" --world-id "$target" --apply
+
+    # Re-point the nightly backup schedule at the newly active world. The parked
+    # world's namespace is gone, so leaving the cron on it would silently break
+    # backups. Best-effort: a swap that already activated the target must not be
+    # failed by a crontab hiccup. No-op if no schedule is installed.
+    section "Retargeting backup schedule"
+    local dune_ctl="$REPO_ROOT/dune-ctl/target/release/dune-ctl"
+    if [ -x "$dune_ctl" ]; then
+        "$dune_ctl" --world "$target" backup schedule --retarget \
+            || echo "WARNING: backup schedule retarget failed; run 'dune-ctl --world $target backup schedule --retarget' manually" >&2
+    else
+        echo "WARNING: dune-ctl binary not found at $dune_ctl; retarget the nightly backup schedule to $target manually" >&2
+    fi
+
+    section "Swap complete"
+    cat <<EOF
+Target $target activated. Next:
+  - Wait ~5-10 min for FLS re-declaration before the world is browser-visible.
+  - Verify: dune-ctl --world $target preflight
+            dune-ctl --world $target status
+EOF
+}
+
 copy_user_settings() {
     local source_root="$1"
     local dest_dir="$2"
@@ -1098,6 +1321,14 @@ case "${1:-}" in
     activate)
         shift
         activate_capsule "$@"
+        ;;
+    park)
+        shift
+        park_capsule "$@"
+        ;;
+    swap)
+        shift
+        swap_capsule "$@"
         ;;
     -h|--help|"")
         usage

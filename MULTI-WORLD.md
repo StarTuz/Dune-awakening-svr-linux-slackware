@@ -1,6 +1,10 @@
 # Multi-World (Hot-Swap) Design
 
-Status: **Design / proposed.** No implementation yet. This captures the plan for
+Status: **Swap machinery implemented (2026-07-07); awaiting world #2.** The
+hot-swap mechanism (`park`/`swap` in `world-capsules.sh`, wired into `dune-ctl`)
+is built and dry-run verified against the live cluster. What remains is standing
+up the second world itself: a new FLS token (six-letter suffix), a `create`d
+capsule, and the in-client character transfer. This captures the plan for
 running more than one Live world/battlegroup on Arrakis so a separate character
 can live on its own world.
 
@@ -94,7 +98,7 @@ Only one world is online at a time; swap on demand.
 | Custom scheduler | `memory-focused-scheduler.sh` binds pods across `-A` (all namespaces) | ✅ no change needed |
 | Capsule model | cold-swap park/activate exists, env-keyed | ⚠️ needs multi-capsule-per-env |
 | `dune-ctl --world` targeting | resolves `~/.dune/capsules/<env>/<bg>/` + legacy YAML | ✅ already multi-world aware |
-| Backups | env+battlegroup-stamped, restore guard refuses env mismatch | ✅ per-world already |
+| Backups | env+battlegroup-stamped storage + off-site replicate the whole `live/` tree recursively | ✅ per-world already; nightly cron follows the active world via swap `--retarget` |
 
 The gap is **not** the cluster — it is that the capsule model assumes **one
 capsule per environment** (`ptc`/`live`). Two Live worlds are both `env=live`.
@@ -123,33 +127,48 @@ name, namespace, FLS token/secret, world data (DB), and UserSettings.
 
 Script-first in `world-capsules.sh`, then wire into `dune-ctl`.
 
-1. **Multi-capsule-per-env keying.** Capsule discovery/inventory already walks
-   `~/.dune/capsules/<env>/<bg>/`; confirm nothing assumes a single `live`
-   capsule. `activate`/`park` must operate per-battlegroup, not per-env.
+1. **Multi-capsule-per-env keying.** ✅ Confirmed. Capsule discovery/inventory
+   walks `~/.dune/capsules/<env>/<bg>/`; `activate`/`park`/`swap` all operate
+   per-battlegroup (`--world-id` / `--to`), not per-env.
 
-2. **Swap command.** `world-capsules.sh swap --to <bg>` (and
-   `dune-ctl worlds swap <world>` / TUI Worlds-tab action) that:
+2. **Swap command.** ✅ Done — `world-capsules.sh swap --to <bg>` and
+   `dune-ctl worlds swap <world>` / `dune-ctl capsules swap`:
    - refuses if the target is already active;
-   - backs up the currently-active world (env+bg stamped);
-   - parks the active world (stop battlegroup, wait for game pods gone, delete
-     namespace **only after backup + export exist** — same algorithm as
+   - parks the active world (stop battlegroup, drain `role=igw-server` pods,
+     env+bg-stamped backup, export namespace evidence, then delete the namespace
+     **only after backup + export exist** — same algorithm as
      `WORLD-CAPSULES.md` §Activation);
-   - activates the target capsule (apply secrets + BattleGroup, wait ready);
+   - activates the target capsule (apply secrets + BattleGroup);
+   - re-points the nightly backup schedule at the newly active world
+     (`dune-ctl backup schedule --retarget`, preserving cron/keep/offsite);
    - prints the FLS-redeclaration reminder + `preflight`.
+   Dry-run by default; `--apply` to execute. TUI Worlds-tab action still TODO.
 
-3. **Single-active guard.** Hard refusal to `activate` world B while world A's
-   namespace still exists (prevents the NodePort/port/FLS collision that would
-   occur if two Live worlds ran at once). Surfaced in CLI + TUI.
+   The backup retarget closes the one non-obvious gap: the nightly 03:00 cron
+   pins `DUNE_CTL_WORLD` to a single battlegroup, so without it a swap would
+   leave backups aimed at the parked world (whose namespace is deleted) and the
+   new active world unbacked. The retarget step is best-effort — it warns rather
+   than fails the swap if the crontab write hiccups — and no-ops when no schedule
+   is installed. Only the active world runs a live DB to dump nightly; a parked
+   world's last backup is its park-time snapshot, and off-site replication sweeps
+   the whole `live/` tree so every world's bundles reach B2 + Google Drive.
+
+3. **Single-active guard.** ✅ Done. `swap` refuses when the target is already
+   online, and `activate --apply` still refuses while any battlegroup exists
+   (unless `--force`). This prevents the NodePort/port/FLS collision that two
+   simultaneous Live worlds would cause.
 
 4. **Create flow for the 2nd world.** Already supported:
    `world-capsules.sh create --env live --name "<title>" --token "<new-token>"`
    renders capsule files only (nothing applied). Needs the new FLS token (see
    below). Six-letter suffix battlegroup name, never numeric.
 
-5. **dune-ctl surface.** `worlds list` already shows capsules; add an active/
-   cold marker and a `worlds swap <world>` verb; TUI Worlds tab (`1`) gains a
-   swap action with confirmation. `token-check --world <bg>` already tracks each
-   world's expiry independently.
+5. **dune-ctl surface.** ✅ CLI done — `worlds list` marks each world
+   `online`/`cold` from the live cluster and `*` for the dune-ctl target;
+   `worlds swap <world>` resolves title-or-id and drives the swap;
+   `capsules park` / `capsules swap` expose the low-level verbs. TUI Worlds
+   tab (`1`) swap action with confirmation still TODO. `token-check --world <bg>`
+   already tracks each world's expiry independently.
 
 6. **Per-world everything is already isolated** by namespace + capsule:
    backups (`/srv/backups/dune/live/<bg>/`), UserSettings
