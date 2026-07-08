@@ -202,7 +202,8 @@ Script-first in `world-capsules.sh`, then wire into `dune-ctl`.
    - re-points the nightly backup schedule at the newly active world
      (`dune-ctl backup schedule --retarget`, preserving cron/keep/offsite);
    - prints the FLS-redeclaration reminder + `preflight`.
-   Dry-run by default; `--apply` to execute. TUI Worlds-tab action still TODO.
+   Dry-run by default; `--apply` to execute. Also available from the TUI Worlds
+   tab via `S` (confirmation + streaming output).
 
    The backup retarget closes the one non-obvious gap: the nightly 03:00 cron
    pins `DUNE_CTL_WORLD` to a single battlegroup, so without it a swap would
@@ -223,12 +224,12 @@ Script-first in `world-capsules.sh`, then wire into `dune-ctl`.
    renders capsule files only (nothing applied). Needs the new FLS token (see
    below). Six-letter suffix battlegroup name, never numeric.
 
-5. **dune-ctl surface.** ✅ CLI done — `worlds list` marks each world
+5. **dune-ctl surface.** ✅ Done — `worlds list` marks each world
    `online`/`cold` from the live cluster and `*` for the dune-ctl target;
    `worlds swap <world>` resolves title-or-id and drives the swap;
-   `capsules park` / `capsules swap` expose the low-level verbs. TUI Worlds
-   tab (`1`) swap action with confirmation still TODO. `token-check --world <bg>`
-   already tracks each world's expiry independently.
+   `capsules park` / `capsules swap` expose the low-level verbs. The TUI Worlds
+   tab (`1`) has an `S` swap action with confirmation + streaming output.
+   `token-check --world <bg>` already tracks each world's expiry independently.
 
 6. **Per-world everything is isolated** by namespace + capsule: the Postgres DB
    (all game/character/base state), FLS/RMQ secrets + DB passwords, BattleGroup

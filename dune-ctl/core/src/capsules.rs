@@ -66,3 +66,46 @@ pub async fn run_stream(cfg: &Config, args: &[String]) -> Result<()> {
     }
     Ok(())
 }
+
+/// Like `run_stream`, but forwards each output line to `tx` instead of the
+/// terminal so a TUI can render it. stderr lines are prefixed with `[err]` to
+/// match the coloring convention used by the update/shutdown streaming panes.
+pub async fn run_stream_tx(
+    cfg: &Config,
+    args: &[String],
+    tx: tokio::sync::mpsc::UnboundedSender<String>,
+) -> Result<()> {
+    let script = script_path(cfg);
+    let mut child = build_command(cfg, args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("failed to spawn {}: {}", script.display(), e))?;
+
+    let stdout = child.stdout.take().expect("stdout piped");
+    let stderr = child.stderr.take().expect("stderr piped");
+
+    let out_tx = tx.clone();
+    let stdout_task = tokio::spawn(async move {
+        let mut lines = BufReader::new(stdout).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = out_tx.send(line);
+        }
+    });
+    let err_tx = tx;
+    let stderr_task = tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let _ = err_tx.send(format!("[err] {}", line));
+        }
+    });
+
+    let status = child.wait().await?;
+    let _ = stdout_task.await;
+    let _ = stderr_task.await;
+
+    if !status.success() {
+        anyhow::bail!("{} exited with status {}", script.display(), status);
+    }
+    Ok(())
+}
