@@ -174,11 +174,17 @@ impl WorldProfile {
 }
 
 fn is_world_spec_filename(fname: &str) -> bool {
+    // ~/.dune also collects non-world YAML: per-map secrets and the
+    // DatabaseOperation manifests that battlegroup.sh writes for dump/import
+    // runs (e.g. <bg>-dump-<ts>.yaml, <bg>-import-<ts>.yaml). Those are
+    // completed-operation records, not world specs — exclude them so they don't
+    // surface as phantom worlds in `worlds list` / the TUI.
     fname.ends_with(".yaml")
         && !fname.contains("-secret")
         && !fname.contains("-rmq")
         && !fname.contains("-fls")
         && !fname.contains("-dump-")
+        && !fname.contains("-import-")
 }
 
 fn discover_yaml_worlds() -> anyhow::Result<Vec<WorldProfile>> {
