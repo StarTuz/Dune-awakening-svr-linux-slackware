@@ -14,6 +14,9 @@ on port 5432 even if older local assumptions expected 15432.
 Commands:
   check       Verify both dune and postgres can authenticate.
   fix         ALTER USER dune/postgres back to the BattleGroup spec passwords.
+  provision   Create the game role+database if missing (idempotent), then verify.
+              Needed the first time a brand-new world is brought up on a fresh
+              Postgres volume; a swap-in of an already-initialized world is a no-op.
   patch-spec  Patch BattleGroup and DatabaseDeployment specs to expected values.
 
 Options:
@@ -55,7 +58,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$cmd" in
-    check|fix|patch-spec) ;;
+    check|fix|provision|patch-spec) ;;
     *)
         usage >&2
         exit 1
@@ -216,6 +219,43 @@ fix_passwords() {
     return 1
 }
 
+# Create the game login role and database if they do not exist, using the
+# superuser, and align the role password with the spec. The stock Postgres image
+# only creates the superuser (POSTGRES_USER=postgres); the game role/database are
+# never provisioned on a fresh volume, and the operator's schema-init only *waits*
+# for them. Idempotent: on an already-initialized world (e.g. a swap-in with an
+# existing volume) the role/db exist and only the password is re-aligned.
+provision_database() {
+    echo "Ensuring game role '$db_user' and database '$db_name' in $db_pod..."
+
+    local role_sql
+    role_sql="DO \$do\$ BEGIN
+        IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$db_user') THEN
+            CREATE ROLE \"$db_user\" WITH LOGIN PASSWORD '$db_password';
+        END IF;
+    END \$do\$;
+    ALTER ROLE \"$db_user\" WITH LOGIN PASSWORD '$db_password';"
+    sudo kubectl exec -n "$ns" "$db_pod" -- env PGPASSWORD="$super_password" \
+        psql -h 127.0.0.1 -p "$db_port" -U "$super_user" -d postgres -v ON_ERROR_STOP=1 \
+        -c "$role_sql" >/dev/null
+
+    # CREATE DATABASE cannot run inside a DO block/transaction, so guard it with a
+    # shell-side existence check rather than a server-side conditional.
+    local exists
+    exists="$(sudo kubectl exec -n "$ns" "$db_pod" -- env PGPASSWORD="$super_password" \
+        psql -h 127.0.0.1 -p "$db_port" -U "$super_user" -d postgres -Atc \
+        "SELECT 1 FROM pg_database WHERE datname = '$db_name'" 2>/dev/null || true)"
+    if [ "$exists" = "1" ]; then
+        echo "  database $db_name already exists"
+    else
+        sudo kubectl exec -n "$ns" "$db_pod" -- env PGPASSWORD="$super_password" \
+            psql -h 127.0.0.1 -p "$db_port" -U "$super_user" -d postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE DATABASE \"$db_name\" OWNER \"$db_user\";" >/dev/null
+        echo "  created database $db_name owned by $db_user"
+    fi
+    echo "Game role/database ensured."
+}
+
 select_battlegroup
 
 db_name="$(jsonpath_or_default '{.spec.database.template.spec.deployment.spec.gameDatabaseName}' dune)"
@@ -251,5 +291,13 @@ case "$cmd" in
         psql_exec "$super_user" "$super_password" postgres "select 1"
         psql_exec "$db_user" "$db_password" "$db_name" "select 1"
         echo "Database credentials repaired."
+        ;;
+    provision)
+        wait_for_db "$wait_timeout"
+        psql_exec "$super_user" "$super_password" postgres "select 1"
+        provision_database
+        echo "Verifying game credentials..."
+        psql_exec "$db_user" "$db_password" "$db_name" "select 1"
+        echo "Database provisioned."
         ;;
 esac

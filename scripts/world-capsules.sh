@@ -737,6 +737,36 @@ activate_capsule() {
     sudo_capsule kubectl apply -n "$ns" -f "$dir/rmq-secret.yaml"
     sudo_capsule kubectl apply -n "$ns" -f "$dir/battlegroup.yaml"
     echo "Capsule applied. Watch with: sudo kubectl get battlegroups -A"
+
+    # A brand-new world comes up on a fresh Postgres volume where only the
+    # superuser exists — the game role/database are never created, and the
+    # operator's schema-init only waits for them (world hangs with
+    # "database \"dune\" does not exist"). Ensure them now; idempotent, so a
+    # swap-in of an already-initialized world is a no-op.
+    provision_database_for "$ns" "$world_id"
+}
+
+# Wait for the operator to bring up the Postgres pod, then ensure the game
+# role/database exist via db-credentials.sh.
+provision_database_for() {
+    local ns="$1" world_id="$2"
+    section "Provisioning game database"
+    local dbpod="" waited=0
+    while [ "$waited" -lt 300 ]; do
+        dbpod="$(sudo_capsule kubectl get pods -n "$ns" --no-headers 2>/dev/null \
+            | awk '/-db-dbdepl-sts-/{print $1; exit}')"
+        if [ -n "$dbpod" ] \
+            && sudo_capsule kubectl wait --for=condition=Ready -n "$ns" "pod/$dbpod" --timeout=10s >/dev/null 2>&1; then
+            break
+        fi
+        dbpod=""
+        sleep 10
+        waited=$((waited + 10))
+        echo "  waiting for Postgres pod in $ns... (${waited}s / 300s)"
+    done
+    [ -n "$dbpod" ] || die "Postgres pod did not become ready in $ns; cannot provision game database"
+    "$REPO_ROOT/scripts/db-credentials.sh" provision --bg "$world_id" \
+        || die "game database provisioning failed for $world_id"
 }
 
 # Wait for all game server pods (role=igw-server) in a namespace to terminate.
