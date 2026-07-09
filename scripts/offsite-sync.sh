@@ -141,6 +141,18 @@ do_snapshots() {
     done
 }
 
+# Remove stale restic locks. An interrupted run (e.g. a backup killed mid-flight)
+# can leave a lock behind that blocks the next check/prune. restic unlock only
+# clears locks whose owning process is gone, so this is safe to run.
+do_unlock() {
+    local r
+    for r in $(selected_repos); do
+        log "unlock repo (remove stale locks): $r"
+        restic -r "$r" unlock || die "restic unlock failed for $r"
+        log "  unlocked"
+    done
+}
+
 do_prune() {
     local r
     for r in $(selected_repos); do
@@ -160,7 +172,7 @@ main() {
         case "$a" in
             --dry-run) DRY_RUN=1 ;;
             --repo) expect_repo=1 ;;
-            init|run|check|snapshots|prune) cmd="$a" ;;
+            init|run|check|snapshots|prune|unlock) cmd="$a" ;;
             *) die "unknown argument: $a" ;;
         esac
     done
@@ -174,6 +186,7 @@ main() {
         check)     do_check ;;
         snapshots) do_snapshots ;;
         prune)     do_prune ;;
+        unlock)    do_unlock ;;
         *) die "unknown command: $cmd" ;;
     esac
 }
