@@ -217,7 +217,8 @@ Script-first in `world-capsules.sh`, then wire into `dune-ctl`.
    needs an interactive sudo session (cached timestamp) — it fails under
    non-interactive NOPASSWD-only sudo. Auto-restore-on-swap (so swap-back is a
    single step) is a **future item blocked on reworking restore staging** to be
-   sudo-whitelist-safe; do it as opt-in `swap --restore` first.
+   sudo-whitelist-safe; do it as opt-in `swap --restore` first. Full scope in
+   `SWAP-RESTORE-DESIGN.md`.
 
    The backup retarget closes the one non-obvious gap: the nightly 03:00 cron
    pins `DUNE_CTL_WORLD` to a single battlegroup, so without it a swap would
