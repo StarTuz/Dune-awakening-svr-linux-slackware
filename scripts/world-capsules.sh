@@ -744,6 +744,56 @@ activate_capsule() {
     # "database \"dune\" does not exist"). Ensure them now; idempotent, so a
     # swap-in of an already-initialized world is a no-op.
     provision_database_for "$ns" "$world_id"
+
+    # A brand-new world also has no UserSettings on its shared volume, so the
+    # game servers fall back to package defaults (Port=7777/IGWPort=7888 — the
+    # Conan-colliding UE defaults, outside our forwarded 7782-7790 range). Seed
+    # the capsule's UserSettings before the servers start. Skips an already-
+    # initialized world so live settings are never clobbered.
+    deploy_user_settings_for "$ns" "$dir"
+}
+
+# Seed the capsule's UserSettings onto the world's shared volume via the
+# filebrowser pod (which mounts the same PVC the game servers read from at
+# DuneSandbox/Saved). Only seeds a fresh world — an existing UserEngine.ini is
+# left untouched so live-edited settings survive a swap-in.
+deploy_user_settings_for() {
+    local ns="$1" dir="$2"
+    section "Deploying UserSettings"
+    local src="$dir/UserSettings"
+    if [ ! -f "$src/UserEngine.ini" ]; then
+        echo "  capsule has no UserSettings; skipping"
+        return 0
+    fi
+    local fbpod="" waited=0
+    while [ "$waited" -lt 180 ]; do
+        fbpod="$(sudo_capsule kubectl get pods -n "$ns" --no-headers 2>/dev/null \
+            | awk '/-fb-deploy-/{print $1; exit}')"
+        if [ -n "$fbpod" ] \
+            && sudo_capsule kubectl wait --for=condition=Ready -n "$ns" "pod/$fbpod" --timeout=10s >/dev/null 2>&1; then
+            break
+        fi
+        fbpod=""
+        sleep 10
+        waited=$((waited + 10))
+        echo "  waiting for filebrowser pod in $ns... (${waited}s / 180s)"
+    done
+    [ -n "$fbpod" ] || die "filebrowser pod did not become ready in $ns; cannot deploy UserSettings"
+
+    if sudo_capsule kubectl exec -n "$ns" "$fbpod" -- test -f /srv/UserSettings/UserEngine.ini >/dev/null 2>&1; then
+        echo "  UserSettings already present on the volume; leaving them untouched"
+        return 0
+    fi
+
+    sudo_capsule kubectl exec -n "$ns" "$fbpod" -- mkdir -p /srv/UserSettings
+    local f
+    for f in UserEngine.ini UserGame.ini; do
+        [ -f "$src/$f" ] || continue
+        sudo_capsule kubectl cp "$src/$f" "$ns/$fbpod:/srv/UserSettings/$f" \
+            || die "failed to deploy $f to $ns"
+        echo "  deployed $f"
+    done
+    echo "UserSettings deployed; game servers read them from the shared volume on start."
 }
 
 # Wait for the operator to bring up the Postgres pod, then ensure the game
