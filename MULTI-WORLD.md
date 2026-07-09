@@ -215,10 +215,27 @@ Script-first in `world-capsules.sh`, then wire into `dune-ctl`.
    (unless `--force`). This prevents the NodePort/port/FLS collision that two
    simultaneous Live worlds would cause.
 
-4. **Create flow for the 2nd world.** Already supported:
+4. **Create + bootstrap flow for the 2nd world.** ✅
    `world-capsules.sh create --env live --name "<title>" --token "<new-token>"`
    renders capsule files only (nothing applied). Needs the new FLS token (see
    below). Six-letter suffix battlegroup name, never numeric.
+
+   **`activate` bootstraps a brand-new world's live state** (the capsule model
+   was originally built to *swap* worlds whose volumes were already initialized;
+   a from-scratch world needs two extra steps, both idempotent and no-ops on a
+   swap-in of an existing world):
+   - **Game DB** — a fresh Postgres volume has only the superuser; the `dune`
+     role+database are never created and the operator's schema-init just waits
+     for them (world hangs on `FATAL: database "dune" does not exist`). Activate
+     runs `db-credentials.sh provision` to create them.
+   - **UserSettings** — a fresh shared volume has no UserSettings, so the game
+     servers use package defaults (Port=7777/IGWPort=7888 — Conan-colliding,
+     outside 7782-7790). Activate deploys the capsule's UserEngine.ini/
+     UserGame.ini onto the shared volume via the filebrowser pod before the
+     servers start.
+   Verified on `SlackSalusa` (2026-07-08): fresh activate → DB provisioned →
+   UserSettings deployed → start → **Healthy**, `preflight` all-green
+   (game ports advertise 7782-7790).
 
 5. **dune-ctl surface.** ✅ Done — `worlds list` marks each world
    `online`/`cold` from the live cluster and `*` for the dune-ctl target;
