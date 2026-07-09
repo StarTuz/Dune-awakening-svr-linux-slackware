@@ -201,6 +201,24 @@ Script-first in `world-capsules.sh`, then wire into `dune-ctl`.
    Dry-run by default; `--apply` to execute. Also available from the TUI Worlds
    tab via `S` (confirmation + streaming output).
 
+   **Swapping *back* to a world requires a manual restore — swap alone is not
+   enough.** Parking deletes the world's namespace + PVC, so its data lives only
+   in backups; `activate` brings up an EMPTY provisioned db. Validated procedure
+   (Ixware, 2026-07-08):
+   ```sh
+   world-capsules.sh swap --to <bg> --apply     # parks active, activates <bg> empty
+   dune-ctl --world <bg> sietches stop           # activate may leave spec.stop=false
+   dune-ctl --world <bg> backup restore <bundle> --yes   # needs battlegroup stopped
+   dune-ctl --world <bg> sietches start
+   dune-ctl --world <bg> preflight
+   ```
+   Restored game data lands in the `dune` schema (not `public`). **Caveat:** the
+   restore stages the dump via `sudo cp/mkdir` to a root-owned host path, so it
+   needs an interactive sudo session (cached timestamp) — it fails under
+   non-interactive NOPASSWD-only sudo. Auto-restore-on-swap (so swap-back is a
+   single step) is a **future item blocked on reworking restore staging** to be
+   sudo-whitelist-safe; do it as opt-in `swap --restore` first.
+
    The backup retarget closes the one non-obvious gap: the nightly 03:00 cron
    pins `DUNE_CTL_WORLD` to a single battlegroup, so without it a swap would
    leave backups aimed at the parked world (whose namespace is deleted) and the
