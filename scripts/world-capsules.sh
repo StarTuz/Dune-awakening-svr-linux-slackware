@@ -31,6 +31,7 @@ Commands:
   activate [options]                Dry-run or apply a rendered capsule
   park [options]                    Dry-run or apply a park of the active world
   swap [options]                    Hot-swap the active Live world for another capsule
+  restore [options]                 Sudo-safe restore of a backup bundle into a stopped world
   -h, --help                        Show this help
 
 Create options:
@@ -796,6 +797,125 @@ deploy_user_settings_for() {
     echo "UserSettings deployed; game servers read them from the shared volume on start."
 }
 
+# Restore a database dump into a STOPPED world via a Funcom import
+# DatabaseOperation, staging the dump through the filebrowser pod (which mounts
+# the game PVC at /srv, so /srv/DatabaseDumps is what the operator reads). This
+# is the sudo-whitelist-safe path (only `sudo -n kubectl`); the legacy
+# `dune-ctl backup restore` stages via `sudo cp/mkdir` to /funcom/artifacts and
+# fails under non-interactive NOPASSWD-only sudo. Caller MUST ensure the
+# battlegroup is stopped first — import is destructive.
+restore_database_for() {
+    local ns="$1" bg="$2" dump_file="$3"
+    [ -f "$dump_file" ] || die "dump file not found: $dump_file"
+    local backup_name
+    backup_name="$(basename "$dump_file")"
+
+    section "Restoring database ($backup_name)"
+    local fbpod="" waited=0
+    while [ "$waited" -lt 180 ]; do
+        fbpod="$(sudo_capsule kubectl get pods -n "$ns" --no-headers 2>/dev/null \
+            | awk '/-fb-deploy-/{print $1; exit}')"
+        if [ -n "$fbpod" ] \
+            && sudo_capsule kubectl wait --for=condition=Ready -n "$ns" "pod/$fbpod" --timeout=10s >/dev/null 2>&1; then
+            break
+        fi
+        fbpod=""
+        sleep 10
+        waited=$((waited + 10))
+        echo "  waiting for filebrowser pod in $ns... (${waited}s / 180s)"
+    done
+    [ -n "$fbpod" ] || die "filebrowser pod did not become ready in $ns; cannot stage restore"
+
+    # Stage the dump into the game PVC's DatabaseDumps dir (kubectl cp — no sudo cp).
+    sudo_capsule kubectl exec -n "$ns" "$fbpod" -- mkdir -p /srv/DatabaseDumps
+    sudo_capsule kubectl cp "$dump_file" "$ns/$fbpod:/srv/DatabaseDumps/$backup_name" \
+        || die "failed to stage dump into $ns"
+    echo "  staged $backup_name into the game volume"
+
+    # Apply an import DatabaseOperation and wait for it (mirrors dune-backup.sh's
+    # dump-side pattern, action=import).
+    local op_name="$bg-import-$(date +%Y%m%d-%H%M%S)"
+    printf '%s\n' \
+        'apiVersion: igw.funcom.com/v1' \
+        'kind: DatabaseOperation' \
+        'metadata:' \
+        "  name: $op_name" \
+        "  namespace: $ns" \
+        'spec:' \
+        "  battleGroup: $bg" \
+        '  action: import' \
+        "  backup: $backup_name" \
+        | sudo_capsule kubectl apply -f - || die "failed to apply import operation"
+    echo "  import operation $op_name applied; waiting..."
+
+    local elapsed=0 interval=5 timeout=600 phase
+    while [ "$elapsed" -lt "$timeout" ]; do
+        phase="$(sudo_capsule kubectl get databaseoperation "$op_name" -n "$ns" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+        case "$phase" in
+            Succeeded)
+                echo "  database import succeeded."
+                return 0
+                ;;
+            Failed)
+                sudo_capsule kubectl describe databaseoperation "$op_name" -n "$ns" >&2 || true
+                die "import operation $op_name failed"
+                ;;
+        esac
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+        echo "  still waiting... (${elapsed}s / ${timeout}s, phase=${phase:-Pending})"
+    done
+    die "timed out waiting for import operation $op_name"
+}
+
+# Standalone sudo-safe restore of a backup bundle into a stopped world. Used to
+# validate B0 independently of swap; B1 (swap --restore) reuses
+# restore_database_for. Dry-run by default.
+restore_capsule() {
+    local env="live" world_id="" bundle="" apply=0
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --env) env="${2:-}"; shift 2 ;;
+            --world|--world-id|--to) world_id="${2:-}"; shift 2 ;;
+            --bundle) bundle="${2:-}"; shift 2 ;;
+            --apply) apply=1; shift ;;
+            *) die "unknown restore option: $1" ;;
+        esac
+    done
+    validate_env "$env"
+    [ -n "$world_id" ] || die "--world-id <battlegroup> is required"
+    [ -n "$bundle" ] || die "--bundle <timestamp> is required"
+
+    local ns="$BATTLEGROUP_PREFIX$world_id"
+    local bundle_dir="$BACKUP_ROOT/$env/$world_id/$bundle"
+    [ -d "$bundle_dir" ] || die "bundle not found: $bundle_dir"
+    local dump_file
+    dump_file="$(ls -1 "$bundle_dir/database/"*.backup 2>/dev/null | grep -v '\.yaml$' | head -1)"
+    [ -n "$dump_file" ] || die "no .backup dump in $bundle_dir/database/"
+
+    echo "Restore plan:"
+    echo "  env=$env"
+    echo "  world_id=$world_id"
+    echo "  namespace=$ns"
+    echo "  bundle=$bundle"
+    echo "  dump=$dump_file"
+    echo "  steps: verify stopped -> stage dump (kubectl) -> import DatabaseOperation"
+
+    if [ "$apply" -ne 1 ]; then
+        echo
+        echo "Dry run only. Re-run with --apply to perform the restore (world must be stopped)."
+        return 0
+    fi
+
+    # Import is destructive; require the battlegroup stopped.
+    local stop
+    stop="$(sudo_capsule kubectl get battlegroup "$world_id" -n "$ns" -o jsonpath='{.spec.stop}' 2>/dev/null || true)"
+    [ "$stop" = "true" ] || die "battlegroup $world_id is not stopped (spec.stop=${stop:-unknown}); run 'dune-ctl --world $world_id sietches stop' first"
+
+    restore_database_for "$ns" "$world_id" "$dump_file"
+    echo "Restore complete. Start with: dune-ctl --world $world_id sietches start"
+}
+
 # Wait for the operator to bring up the Postgres pod, then ensure the game
 # role/database exist via db-credentials.sh.
 provision_database_for() {
@@ -1415,6 +1535,10 @@ case "${1:-}" in
     swap)
         shift
         swap_capsule "$@"
+        ;;
+    restore)
+        shift
+        restore_capsule "$@"
         ;;
     -h|--help|"")
         usage
