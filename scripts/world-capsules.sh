@@ -80,6 +80,11 @@ Swap options:
   --to NAME                         Target capsule battlegroup id to activate
   --apply                           Park the active world and activate the target
   --skip-backup                     Skip the parked world's final backup
+  --restore                         After activating, restore the target's latest
+                                    backup (parked worlds come up empty). Guarded:
+                                    only when a backup exists and the db is empty.
+  --restore-force                   With --restore, restore even if the db is
+                                    non-empty (e.g. schema-init seed rows).
 EOF
 }
 
@@ -1054,6 +1059,8 @@ swap_capsule() {
     local target=""
     local apply=0
     local skip_backup=0
+    local restore=0
+    local restore_force=0
 
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -1071,6 +1078,17 @@ swap_capsule() {
                 ;;
             --skip-backup)
                 skip_backup=1
+                shift
+                ;;
+            --restore)
+                restore=1
+                shift
+                ;;
+            --restore-force)
+                # Override the empty-db guard (e.g. when schema-init seeds rows).
+                # Still refuses to run without --restore.
+                restore=1
+                restore_force=1
                 shift
                 ;;
             *)
@@ -1095,6 +1113,18 @@ swap_capsule() {
         die "target $target is already active; nothing to swap"
     fi
 
+    # Resolve the target's latest backup bundle up front so both the dry-run and
+    # the apply path agree on exactly what would be restored.
+    local restore_bundle="" restore_dump=""
+    if [ "$restore" -eq 1 ]; then
+        restore_bundle="$(ls -1d "$BACKUP_ROOT/$env/$target/"*/ 2>/dev/null \
+            | sed 's:/*$::' | awk -F/ '{print $NF}' | sort -r | head -1)"
+        if [ -n "$restore_bundle" ]; then
+            restore_dump="$(ls -1 "$BACKUP_ROOT/$env/$target/$restore_bundle/database/"*.backup 2>/dev/null \
+                | grep -v '\.yaml$' | head -1)"
+        fi
+    fi
+
     echo "Swap plan:"
     echo "  env=$env"
     echo "  target=$target ($target_dir)"
@@ -1103,7 +1133,19 @@ swap_capsule() {
     else
         echo "  park_active=none (no world currently online)"
     fi
-    echo "  steps: park active world(s) -> activate target -> FLS re-declare -> preflight"
+    if [ "$restore" -eq 1 ]; then
+        if [ -n "$restore_dump" ]; then
+            echo "  restore=yes bundle=$restore_bundle dump=$(basename "$restore_dump")"
+            echo "          (guard: only into an empty dune schema$([ "$restore_force" -eq 1 ] && echo '; --restore-force overrides'))"
+        elif [ -n "$restore_bundle" ]; then
+            echo "  restore=yes bundle=$restore_bundle but NO .backup dump found -> would ABORT"
+        else
+            echo "  restore=yes but target has no backup bundle -> skip (treated as fresh world)"
+        fi
+    else
+        echo "  restore=no (activate leaves an empty db; use --restore to auto-restore latest backup)"
+    fi
+    echo "  steps: park active world(s) -> activate target$([ "$restore" -eq 1 ] && echo ' -> stop -> restore latest') -> FLS re-declare -> preflight"
 
     if [ "$apply" -ne 1 ]; then
         echo
@@ -1126,6 +1168,40 @@ EOF
     section "Activating target $target"
     activate_capsule --env "$env" --world-id "$target" --apply
 
+    # Auto-restore (B1): a parked world's data lives only in its backups, so a
+    # bare swap-in yields an empty world. When --restore is set, restore the
+    # target's latest bundle into the freshly-activated (empty) db. Guarded:
+    # only when a backup exists AND the dune schema is empty (never clobber).
+    if [ "$restore" -eq 1 ]; then
+        local rt_ns="$BATTLEGROUP_PREFIX$target"
+        if [ -z "$restore_bundle" ]; then
+            section "Auto-restore skipped"
+            echo "  $target has no backup bundle under $BACKUP_ROOT/$env/$target/; leaving empty db (fresh world)."
+        else
+            [ -n "$restore_dump" ] || die "bundle $restore_bundle has no .backup dump; refusing to continue (world is up but empty). Restore manually."
+            section "Auto-restore: empty-db guard"
+            local rows
+            rows="$("$REPO_ROOT/scripts/db-credentials.sh" data-check --bg "$target" 2>/dev/null || echo unknown)"
+            echo "  dune-schema live rows (estimate): $rows"
+            if [ "$rows" = "unknown" ]; then
+                die "could not determine whether $target's db is empty; refusing auto-restore. Inspect, then restore manually or re-run with --restore-force."
+            fi
+            if [ "$rows" != "0" ] && [ "$restore_force" -ne 1 ]; then
+                die "$target already has data (~$rows rows) — refusing to clobber. If this is only schema-init seed data, re-run with --restore-force."
+            fi
+
+            section "Auto-restore: stopping $target before import"
+            sudo_capsule kubectl patch battlegroup "$target" -n "$rt_ns" \
+                --type=merge -p '{"spec":{"stop":true}}'
+            wait_game_pods_gone "$rt_ns" || die "game pods for $target did not drain; refusing destructive import. Restore manually once stopped."
+
+            restore_database_for "$rt_ns" "$target" "$restore_dump"
+            section "Auto-restore complete"
+            echo "  restored $restore_bundle into $target; the world is left STOPPED."
+            echo "  start it with: dune-ctl --world $target sietches start"
+        fi
+    fi
+
     # Re-point the nightly backup schedule at the newly active world. The parked
     # world's namespace is gone, so leaving the cron on it would silently break
     # backups. Best-effort: a swap that already activated the target must not be
@@ -1140,12 +1216,22 @@ EOF
     fi
 
     section "Swap complete"
-    cat <<EOF
+    if [ "$restore" -eq 1 ] && [ -n "$restore_bundle" ]; then
+        cat <<EOF
+Target $target activated and restored from $restore_bundle (left STOPPED). Next:
+  - Start it:  dune-ctl --world $target sietches start
+  - Wait ~5-10 min for FLS re-declaration before the world is browser-visible.
+  - Verify: dune-ctl --world $target preflight
+            dune-ctl --world $target status
+EOF
+    else
+        cat <<EOF
 Target $target activated. Next:
   - Wait ~5-10 min for FLS re-declaration before the world is browser-visible.
   - Verify: dune-ctl --world $target preflight
             dune-ctl --world $target status
 EOF
+    fi
 }
 
 copy_user_settings() {

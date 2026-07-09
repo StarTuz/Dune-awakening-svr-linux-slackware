@@ -1,10 +1,34 @@
 # Swap-Restore Design ("B": seamless swap-back)
 
-Status: **Design / not yet built.** Scoped 2026-07-08 after the first real
+Status: **B0 + B1 built (2026-07-09), non-destructively validated; destructive
+end-to-end restore not yet exercised.** Scoped 2026-07-08 after the first real
 multi-world lifecycle (create → swap → transfer → swap-back → restore) was run
 end-to-end by hand. This captures how to make **swapping back into a parked
 world restore its data automatically**, so a swap-in is one step instead of the
 manual stop→restore→start dance.
+
+**Where it stands (2026-07-09):**
+- **B0 (sudo-safe restore staging) — built.** `world-capsules.sh`
+  `restore_database_for()` stages the dump through the filebrowser pod
+  (`kubectl cp` into `/srv/DatabaseDumps`) and applies an import
+  `DatabaseOperation` — only whitelisted `sudo -n kubectl`, no host-path sudo.
+  Standalone entry: `world-capsules.sh restore --world-id <bg> --bundle <ts>`
+  (dry-run default; refuses unless the battlegroup is stopped).
+- **B1 (opt-in `swap --restore`) — built.** `world-capsules.sh swap --restore`
+  (and `--restore-force`), plumbed through `dune-ctl worlds swap --restore` and
+  `capsules swap --restore`. After activate: resolve latest bundle → empty-db
+  guard (`db-credentials.sh data-check`) → stop + drain → `restore_database_for`
+  → leave STOPPED with a `sietches start` reminder.
+- **Validated non-destructively:** bundle/dump resolution, import
+  `DatabaseOperation` passes server-side validation, `/srv/DatabaseDumps` is
+  writable via kubectl, stopped-guard refuses a running world, the single-active
+  invariant refuses a swap into the live world, and `data-check` reported 23888
+  rows on live Ixware (so the empty-db guard correctly *refuses* a populated
+  target). All under non-interactive sudo.
+- **NOT yet done:** a real destructive import (apply an import operation and
+  confirm the `dune`-schema data returns). Gated to the **next swap into
+  SlackSalusa**, which carries a verified B2 + Google Drive backup as a safety
+  net — never on live Ixware (main character, running).
 
 Related: `MULTI-WORLD.md` (hot-swap model + validated manual swap-back),
 `WORLD-CAPSULES.md` (capsule/activate), `BACKUP-RESTORE.md` (restore mechanics).
@@ -124,6 +148,16 @@ Keep it **opt-in** (`--restore`, default off) until proven. Dry-run prints which
 bundle *would* be restored and the empty/non-empty guard result. Best-effort
 logging parallel to the backup-retarget step.
 
+**Empty-db guard details (as built).** `db-credentials.sh data-check` prints the
+summed `pg_stat_user_tables.n_live_tup` for the `dune` schema — a *row estimate*,
+deliberately **not** a table count: a freshly schema-init'd world has empty
+tables but 0 rows, so it still reads as empty and is restorable. The guard
+refuses when the estimate is non-zero (or `unknown`). **Open item to verify on
+the first real exercise:** whether the operator's schema-init seeds any rows into
+the `dune` schema on a just-activated, never-played world. If it does, the guard
+will refuse a legitimate auto-restore; `--restore-force` is the escape hatch, and
+we should record the observed count and tune the guard rather than default-force.
+
 ### Phase B2 — polish (after B1 is proven)
 
 - TUI Worlds-tab `S` swap: offer a "restore latest backup" checkbox/confirm line.
@@ -156,8 +190,12 @@ logging parallel to the backup-retarget step.
 
 ## Scope summary
 
-| Phase | What | Gates |
-|---|---|---|
-| **B0** | Sudo-whitelist-safe restore staging (kubectl-cp into PVC + direct DatabaseOperation) | Prerequisite; independently useful |
-| **B1** | Opt-in `swap --restore`: activate → (empty-db guard) → stop → restore latest → start | Needs B0 |
-| **B2** | TUI checkbox + consider default-on | Needs B1 proven on a real swap |
+| Phase | What | Gates | Status |
+|---|---|---|---|
+| **B0** | Sudo-whitelist-safe restore staging (kubectl-cp into PVC + direct DatabaseOperation) | Prerequisite; independently useful | **built**, validated non-destructively |
+| **B1** | Opt-in `swap --restore`: activate → (empty-db guard) → stop → restore latest → leave stopped | Needs B0 | **built** (shell + dune-ctl); destructive test gated to next SlackSalusa swap |
+| **B2** | TUI checkbox + consider default-on | Needs B1 proven on a real swap | not started |
+
+> B1 leaves the world **stopped** after restore (with a `sietches start`
+> reminder) rather than auto-starting — a deliberate verify point for v1.
+> Auto-start is a B2 consideration once B1 has ridden a real swap.

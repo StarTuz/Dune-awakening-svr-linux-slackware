@@ -5,7 +5,7 @@ BATTLEGROUP_PREFIX="funcom-seabass-"
 
 usage() {
     cat <<EOF
-Usage: $0 <check|fix|patch-spec> [--bg NAME]
+Usage: $0 <check|fix|provision|data-check|patch-spec> [--bg NAME]
 
 Checks or repairs the expected Dune Postgres credentials using the live
 BattleGroup/DatabaseDeployment specs. The updated operator may expose Postgres
@@ -17,6 +17,9 @@ Commands:
   provision   Create the game role+database if missing (idempotent), then verify.
               Needed the first time a brand-new world is brought up on a fresh
               Postgres volume; a swap-in of an already-initialized world is a no-op.
+  data-check  Print the estimated live-row count across the game 'dune' schema
+              (0 = empty world). Read-only; used as the auto-restore empty-db
+              guard. Prints 'unknown' if the schema cannot be queried.
   patch-spec  Patch BattleGroup and DatabaseDeployment specs to expected values.
 
 Options:
@@ -58,7 +61,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$cmd" in
-    check|fix|provision|patch-spec) ;;
+    check|fix|provision|data-check|patch-spec) ;;
     *)
         usage >&2
         exit 1
@@ -299,5 +302,21 @@ case "$cmd" in
         echo "Verifying game credentials..."
         psql_exec "$db_user" "$db_password" "$db_name" "select 1"
         echo "Database provisioned."
+        ;;
+    data-check)
+        # Read-only empty/populated probe for the auto-restore guard. Uses the
+        # planner's live-row estimate (pg_stat_user_tables.n_live_tup), not table
+        # existence: a freshly schema-init'd world has empty tables but 0 rows, so
+        # it still reads as empty. Prints a single integer (or 'unknown') to stdout
+        # and nothing else — callers parse it. Missing dune schema => 0.
+        wait_for_db "$wait_timeout" >&2
+        rows="$(sudo kubectl exec -n "$ns" "$db_pod" -- env PGPASSWORD="$db_password" \
+            psql -h 127.0.0.1 -p "$db_port" -U "$db_user" -d "$db_name" -Atc \
+            "SELECT COALESCE(sum(n_live_tup),0)::bigint FROM pg_stat_user_tables WHERE schemaname='dune';" \
+            2>/dev/null || true)"
+        case "$rows" in
+            ''|*[!0-9]*) echo "unknown" ;;
+            *)           echo "$rows" ;;
+        esac
         ;;
 esac
