@@ -176,12 +176,24 @@ always non-zero. The allowlist tolerates a renamed/absent table (it just
 contributes nothing), so the guard fails safe on the remaining tables. Guard
 refuses when the count is non-zero (or `unknown`); `--restore-force` overrides.
 
-### Phase B2 — polish (after B1 is proven)
+### Phase B2 — polish (built 2026-07-10, after B1 was proven)
 
-- TUI Worlds-tab `S` swap: offer a "restore latest backup" checkbox/confirm line.
-- Consider making `--restore` the **default** for a swap-in of a world that has
-  backups (with `--no-restore` escape hatch), once B1 has ridden a few real
-  swaps without surprises.
+- **Restore is now the default** for a swap. A bare `swap --apply` (and the TUI
+  `S` action) restores the target's latest backup, because a parked world always
+  comes up empty — the old opt-in default was a footgun (a plain swap silently
+  gave you an empty world). `--no-restore` is the escape hatch for a deliberate
+  fresh start; `--restore-force` still overrides the empty-db guard. Safe by
+  construction: the guard skips when no backup exists and refuses a populated
+  target. Plumbed through `world-capsules.sh swap`, `dune-ctl worlds swap`, and
+  `dune-ctl capsules swap` (the opt-in `--restore` flag is gone from dune-ctl;
+  the shell still accepts `--restore` as an explicit no-op).
+- **TUI `S` swap** inherits the default (no flag passed), and its confirm-modal
+  text now spells out: parks the online world, activates + restores the selected
+  one, and leaves it STOPPED (start from the Sietches tab, then preflight).
+- **Auto-start after restore: intentionally NOT done.** The swap leaves the
+  restored world stopped as a verify point — confirm the restore (preflight)
+  before it goes live. A bad restore should not auto-publish. Revisit only if the
+  extra manual start proves annoying in practice.
 
 ---
 
@@ -191,7 +203,8 @@ refuses when the count is non-zero (or `unknown`); `--restore-force` overrides.
   accidental double-restore or a swap-in of a live world a no-op refusal.
 - **Only when a backup exists** for the target; otherwise skip (fresh world).
 - **Env-guarded** (reuse `ensure_bundle_environment`); never cross PTC↔Live.
-- **Opt-in first**, dry-run shows the plan, source bundles are immutable
+- **Default-on with a `--no-restore` escape** (since B1 was proven — B2); dry-run
+  shows the exact bundle and guard result; source bundles are immutable
   (recoverable if anything goes wrong).
 - **Never the world's only copy under test** — validate against a world with a
   verified off-site backup.
@@ -212,7 +225,7 @@ refuses when the count is non-zero (or `unknown`); `--restore-force` overrides.
 |---|---|---|---|
 | **B0** | Sudo-whitelist-safe restore staging (kubectl-cp into PVC + direct DatabaseOperation) | Prerequisite; independently useful | **built + proven** (real import Succeeded 2026-07-10) |
 | **B1** | Opt-in `swap --restore`: activate → (empty-db guard) → stop → restore latest → leave stopped | Needs B0 | **built + exercised** (shell + dune-ctl); guard baseline fixed to player-domain tables |
-| **B2** | TUI checkbox + consider default-on | Needs B1 proven on a real swap | not started (B1 now proven — unblocked) |
+| **B2** | Restore default-on (`--no-restore` escape) + TUI confirm text; auto-start deliberately deferred | Needs B1 proven on a real swap | **built** 2026-07-10 |
 
 > B1 leaves the world **stopped** after restore (with a `sietches start`
 > reminder) rather than auto-starting — a deliberate verify point for v1.

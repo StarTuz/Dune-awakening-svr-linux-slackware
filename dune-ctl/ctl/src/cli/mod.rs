@@ -125,11 +125,12 @@ pub enum WorldsCommand {
         /// Skip the parked world's final backup (not recommended)
         #[arg(long)]
         skip_backup: bool,
-        /// After activating, restore the target's latest backup (parked worlds
-        /// come up empty). Guarded: only when a backup exists and the db is empty
+        /// Skip the auto-restore and activate with an empty db (deliberate fresh
+        /// start). By default a swap restores the target's latest backup, since a
+        /// parked world comes up empty; guarded to empty targets with a backup
         #[arg(long)]
-        restore: bool,
-        /// With --restore, restore even if the target db is non-empty
+        no_restore: bool,
+        /// Restore even if the target db already has player data
         #[arg(long)]
         restore_force: bool,
     },
@@ -271,10 +272,11 @@ pub enum CapsulesCommand {
         /// Skip the parked world's final backup
         #[arg(long)]
         skip_backup: bool,
-        /// After activating, restore the target's latest backup (empty-db guarded)
+        /// Skip the auto-restore and activate with an empty db (default is to
+        /// restore the target's latest backup; empty-db guarded)
         #[arg(long)]
-        restore: bool,
-        /// With --restore, restore even if the target db is non-empty
+        no_restore: bool,
+        /// Restore even if the target db already has player data
         #[arg(long)]
         restore_force: bool,
     },
@@ -829,7 +831,7 @@ async fn cmd_worlds(action: WorldsCommand, cfg: &Config) -> Result<()> {
             env,
             apply,
             skip_backup,
-            restore,
+            no_restore,
             restore_force,
         } => {
             // Resolve title-or-id to a battlegroup id via the known worlds.
@@ -856,10 +858,11 @@ async fn cmd_worlds(action: WorldsCommand, cfg: &Config) -> Result<()> {
             if skip_backup {
                 args.push("--skip-backup".to_string());
             }
+            // Restore is the shell default; only pass a flag to override it.
             if restore_force {
                 args.push("--restore-force".to_string());
-            } else if restore {
-                args.push("--restore".to_string());
+            } else if no_restore {
+                args.push("--no-restore".to_string());
             }
             capsules::run_stream(cfg, &args).await?;
         }
@@ -1458,7 +1461,7 @@ async fn cmd_capsules(action: CapsulesCommand, cfg: &Config) -> Result<()> {
             to,
             apply,
             skip_backup,
-            restore,
+            no_restore,
             restore_force,
         } => {
             let mut args = vec![
@@ -1474,10 +1477,11 @@ async fn cmd_capsules(action: CapsulesCommand, cfg: &Config) -> Result<()> {
             if skip_backup {
                 args.push("--skip-backup".to_string());
             }
+            // Restore is the shell default; only pass a flag to override it.
             if restore_force {
                 args.push("--restore-force".to_string());
-            } else if restore {
-                args.push("--restore".to_string());
+            } else if no_restore {
+                args.push("--no-restore".to_string());
             }
             capsules::run_stream(cfg, &args).await?;
         }

@@ -174,7 +174,7 @@ impl PendingAction {
                 "Removes the nightly backup cron job. Existing backup data is not deleted."
             }
             Self::SwapWorld => {
-                "Hot-swaps the active Live world for the selected one. Parks whatever is online (stop BattleGroup, drain game pods, final backup, export, then DELETE its namespace), then activates the selected world and re-points the nightly backup schedule at it. Only one world is online at a time; the parked world is recoverable from its backup by swapping back. Refuses if the selected world is already online. Takes several minutes; output streams below."
+                "Hot-swaps the active Live world for the selected one. Parks whatever is online (stop BattleGroup, drain game pods, final backup, export, then DELETE its namespace), activates the selected world, and re-points the nightly backup schedule at it. Because a parked world comes up empty, it then restores the selected world's latest backup (skipped if it has none; refused if it already has player data) and leaves it STOPPED — start it from the Sietches tab and check preflight. Only one world is online at a time. Refuses if the selected world is already online. Takes several minutes; output streams below."
             }
         }
     }
@@ -567,7 +567,8 @@ pub fn start_swap_run(app: &mut App) {
     let cfg = app.cfg.clone();
     // The Worlds tab retargets app.cfg to the highlighted world, so the swap
     // target is the current cfg. The shell independently finds and parks
-    // whatever is online, and refuses if the target is already active.
+    // whatever is online, and refuses if the target is already active. Restore is
+    // the shell default (a parked world comes up empty), so no flag is needed.
     let args = vec![
         String::from("swap"),
         String::from("--env"),
@@ -580,7 +581,7 @@ pub fn start_swap_run(app: &mut App) {
         capsules::run_stream_tx(&cfg, &args, tx).await
     }));
     app.push_log("world swap started");
-    app.push_log("swap parks the active world and activates the selected one");
+    app.push_log("swap parks the online world, activates + restores the selected one (left stopped)");
 }
 
 pub fn start_token_rotation(app: &mut App) -> Result<()> {

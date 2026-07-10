@@ -80,11 +80,14 @@ Swap options:
   --to NAME                         Target capsule battlegroup id to activate
   --apply                           Park the active world and activate the target
   --skip-backup                     Skip the parked world's final backup
-  --restore                         After activating, restore the target's latest
-                                    backup (parked worlds come up empty). Guarded:
-                                    only when a backup exists and the db is empty.
-  --restore-force                   With --restore, restore even if the db is
-                                    non-empty (e.g. schema-init seed rows).
+  --restore                         Restore the target's latest backup after
+                                    activating (DEFAULT — parked worlds come up
+                                    empty). Guarded: only when a backup exists and
+                                    the db has no player data; world left stopped.
+  --no-restore                      Deliberate fresh start: activate with an empty
+                                    db, skip the auto-restore.
+  --restore-force                   Restore even if the target db already has
+                                    player data (e.g. schema-init seed rows).
 EOF
 }
 
@@ -1059,7 +1062,8 @@ swap_capsule() {
     local target=""
     local apply=0
     local skip_backup=0
-    local restore=0
+    local restore=1          # default-on: a parked world comes up empty, so a
+                             # swap-in restores its latest backup unless told not to
     local restore_force=0
 
     while [ "$#" -gt 0 ]; do
@@ -1081,12 +1085,16 @@ swap_capsule() {
                 shift
                 ;;
             --restore)
-                restore=1
+                restore=1        # explicit; this is now the default
+                shift
+                ;;
+            --no-restore)
+                # Deliberate fresh start: activate the target with an empty db.
+                restore=0
                 shift
                 ;;
             --restore-force)
                 # Override the empty-db guard (e.g. when schema-init seeds rows).
-                # Still refuses to run without --restore.
                 restore=1
                 restore_force=1
                 shift
@@ -1143,7 +1151,7 @@ swap_capsule() {
             echo "  restore=yes but target has no backup bundle -> skip (treated as fresh world)"
         fi
     else
-        echo "  restore=no (activate leaves an empty db; use --restore to auto-restore latest backup)"
+        echo "  restore=no (--no-restore: activate leaves an empty db — deliberate fresh start)"
     fi
     echo "  steps: park active world(s) -> activate target$([ "$restore" -eq 1 ] && echo ' -> stop -> restore latest') -> FLS re-declare -> preflight"
 
