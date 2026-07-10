@@ -1182,12 +1182,12 @@ EOF
             section "Auto-restore: empty-db guard"
             local rows
             rows="$("$REPO_ROOT/scripts/db-credentials.sh" data-check --bg "$target" 2>/dev/null || echo unknown)"
-            echo "  dune-schema live rows (estimate): $rows"
+            echo "  player-owned rows (schema-init seed excluded): $rows"
             if [ "$rows" = "unknown" ]; then
-                die "could not determine whether $target's db is empty; refusing auto-restore. Inspect, then restore manually or re-run with --restore-force."
+                die "could not determine whether $target has player data; refusing auto-restore. Inspect, then restore manually or re-run with --restore-force."
             fi
             if [ "$rows" != "0" ] && [ "$restore_force" -ne 1 ]; then
-                die "$target already has data (~$rows rows) — refusing to clobber. If this is only schema-init seed data, re-run with --restore-force."
+                die "$target already has player data (~$rows player-owned rows) — refusing to clobber. Re-run with --restore-force only if you are sure this world should be overwritten."
             fi
 
             section "Auto-restore: stopping $target before import"

@@ -1,7 +1,9 @@
 # Swap-Restore Design ("B": seamless swap-back)
 
-Status: **B0 + B1 built (2026-07-09), non-destructively validated; destructive
-end-to-end restore not yet exercised.** Scoped 2026-07-08 after the first real
+Status: **B0 + B1 built and exercised end-to-end (2026-07-10).** First real swap
+into SlackSalusa with `--restore` ran the full path; the destructive import
+succeeded (player-row count 0 → restored) and the world came up all-green. One
+fix fell out of it (empty-db guard baseline — see below). Scoped 2026-07-08 after the first real
 multi-world lifecycle (create → swap → transfer → swap-back → restore) was run
 end-to-end by hand. This captures how to make **swapping back into a parked
 world restore its data automatically**, so a swap-in is one step instead of the
@@ -25,10 +27,25 @@ manual stop→restore→start dance.
   invariant refuses a swap into the live world, and `data-check` reported 23888
   rows on live Ixware (so the empty-db guard correctly *refuses* a populated
   target). All under non-interactive sudo.
-- **NOT yet done:** a real destructive import (apply an import operation and
-  confirm the `dune`-schema data returns). Gated to the **next swap into
-  SlackSalusa**, which carries a verified B2 + Google Drive backup as a safety
-  net — never on live Ixware (main character, running).
+- **Done 2026-07-10:** real destructive import proven. `swap SlackSalusa
+  --restore --apply` parked Ixware, activated SlackSalusa, and the empty-db guard
+  correctly **refused** (it read the schema-init seed rows) — a *safe* stop
+  before any write. Finishing via the standalone `restore --apply` ran B0's
+  import for real (staged through filebrowser, import `DatabaseOperation`
+  `Starting→Ongoing→Succeeded`); player rows went 0→restored (`data-check` 2995),
+  `sietches start` + `preflight` = all-green.
+
+**The one fix that fell out — empty-db guard baseline.** Schema-init seeds ~888
+rows into a brand-new `dune` schema (`applied_patches`≈846 migrations, plus
+`map_names`, faction/specialization lookups). So the original guard ("refuse if
+*any* dune-schema rows") is never satisfied on a fresh world — plain `--restore`
+would always trip it and demand `--restore-force`, defeating the point. Fixed:
+`db-credentials.sh data-check` now counts only **player-domain** tables
+(`encrypted_accounts`, `encrypted_player_state`, `building_instances`,
+`buildings`, `inventories`, `player_respawn_locations`) via a `pg_stat_user_tables`
+allowlist — 0 on a fresh seeded world, >0 once a character/base exists (SlackSalusa
+read 2995 with one transferred character + two bases). A fresh swap-in now
+auto-restores with plain `--restore`; only a genuinely populated target refuses.
 
 Related: `MULTI-WORLD.md` (hot-swap model + validated manual swap-back),
 `WORLD-CAPSULES.md` (capsule/activate), `BACKUP-RESTORE.md` (restore mechanics).
@@ -148,15 +165,16 @@ Keep it **opt-in** (`--restore`, default off) until proven. Dry-run prints which
 bundle *would* be restored and the empty/non-empty guard result. Best-effort
 logging parallel to the backup-retarget step.
 
-**Empty-db guard details (as built).** `db-credentials.sh data-check` prints the
-summed `pg_stat_user_tables.n_live_tup` for the `dune` schema — a *row estimate*,
-deliberately **not** a table count: a freshly schema-init'd world has empty
-tables but 0 rows, so it still reads as empty and is restorable. The guard
-refuses when the estimate is non-zero (or `unknown`). **Open item to verify on
-the first real exercise:** whether the operator's schema-init seeds any rows into
-the `dune` schema on a just-activated, never-played world. If it does, the guard
-will refuse a legitimate auto-restore; `--restore-force` is the escape hatch, and
-we should record the observed count and tune the guard rather than default-force.
+**Empty-db guard details (as built + tuned 2026-07-10).** `db-credentials.sh
+data-check` sums `pg_stat_user_tables.n_live_tup` for a **player-domain table
+allowlist** in the `dune` schema (`encrypted_accounts`, `encrypted_player_state`,
+`building_instances`, `buildings`, `inventories`, `player_respawn_locations`) —
+0 on a fresh, schema-init'd, never-played world; >0 once a character/base exists.
+It is deliberately **not** "all dune-schema rows": the first real exercise
+confirmed schema-init seeds ~888 reference rows, which would have made that signal
+always non-zero. The allowlist tolerates a renamed/absent table (it just
+contributes nothing), so the guard fails safe on the remaining tables. Guard
+refuses when the count is non-zero (or `unknown`); `--restore-force` overrides.
 
 ### Phase B2 — polish (after B1 is proven)
 
@@ -192,9 +210,9 @@ we should record the observed count and tune the guard rather than default-force
 
 | Phase | What | Gates | Status |
 |---|---|---|---|
-| **B0** | Sudo-whitelist-safe restore staging (kubectl-cp into PVC + direct DatabaseOperation) | Prerequisite; independently useful | **built**, validated non-destructively |
-| **B1** | Opt-in `swap --restore`: activate → (empty-db guard) → stop → restore latest → leave stopped | Needs B0 | **built** (shell + dune-ctl); destructive test gated to next SlackSalusa swap |
-| **B2** | TUI checkbox + consider default-on | Needs B1 proven on a real swap | not started |
+| **B0** | Sudo-whitelist-safe restore staging (kubectl-cp into PVC + direct DatabaseOperation) | Prerequisite; independently useful | **built + proven** (real import Succeeded 2026-07-10) |
+| **B1** | Opt-in `swap --restore`: activate → (empty-db guard) → stop → restore latest → leave stopped | Needs B0 | **built + exercised** (shell + dune-ctl); guard baseline fixed to player-domain tables |
+| **B2** | TUI checkbox + consider default-on | Needs B1 proven on a real swap | not started (B1 now proven — unblocked) |
 
 > B1 leaves the world **stopped** after restore (with a `sietches start`
 > reminder) rather than auto-starting — a deliberate verify point for v1.

@@ -17,9 +17,11 @@ Commands:
   provision   Create the game role+database if missing (idempotent), then verify.
               Needed the first time a brand-new world is brought up on a fresh
               Postgres volume; a swap-in of an already-initialized world is a no-op.
-  data-check  Print the estimated live-row count across the game 'dune' schema
-              (0 = empty world). Read-only; used as the auto-restore empty-db
-              guard. Prints 'unknown' if the schema cannot be queried.
+  data-check  Print the number of PLAYER-owned rows in the 'dune' schema
+              (0 = no character/base yet). Read-only; used as the auto-restore
+              empty-db guard. A freshly-activated world is never literally empty
+              (schema-init seeds ~888 reference rows, e.g. applied_patches), so
+              this counts only player-domain tables. Prints 'unknown' on error.
   patch-spec  Patch BattleGroup and DatabaseDeployment specs to expected values.
 
 Options:
@@ -304,15 +306,24 @@ case "$cmd" in
         echo "Database provisioned."
         ;;
     data-check)
-        # Read-only empty/populated probe for the auto-restore guard. Uses the
-        # planner's live-row estimate (pg_stat_user_tables.n_live_tup), not table
-        # existence: a freshly schema-init'd world has empty tables but 0 rows, so
-        # it still reads as empty. Prints a single integer (or 'unknown') to stdout
-        # and nothing else — callers parse it. Missing dune schema => 0.
+        # Read-only empty/populated probe for the auto-restore guard. Counts only
+        # PLAYER-domain tables, because schema-init seeds ~888 reference rows
+        # (applied_patches migrations, map_names, faction/specialization lookups)
+        # into a brand-new world — so "any dune-schema rows" is never zero and is
+        # the wrong signal. The tables below are 0 until a character/base exists
+        # (verified on SlackSalusa: encrypted_accounts=1, building_instances=2781
+        # with one transferred character + two bases; all 0 on a fresh world).
+        # Uses pg_stat_user_tables.n_live_tup filtered by an allowlist so a
+        # renamed/absent table just contributes nothing rather than erroring, and
+        # the guard fails safe on the remaining tables. Prints one integer (or
+        # 'unknown') to stdout and nothing else — callers parse it.
         wait_for_db "$wait_timeout" >&2
         rows="$(sudo kubectl exec -n "$ns" "$db_pod" -- env PGPASSWORD="$db_password" \
             psql -h 127.0.0.1 -p "$db_port" -U "$db_user" -d "$db_name" -Atc \
-            "SELECT COALESCE(sum(n_live_tup),0)::bigint FROM pg_stat_user_tables WHERE schemaname='dune';" \
+            "SELECT COALESCE(sum(n_live_tup),0)::bigint FROM pg_stat_user_tables
+             WHERE schemaname='dune' AND relname IN (
+               'encrypted_accounts','encrypted_player_state','building_instances',
+               'buildings','inventories','player_respawn_locations');" \
             2>/dev/null || true)"
         case "$rows" in
             ''|*[!0-9]*) echo "unknown" ;;
