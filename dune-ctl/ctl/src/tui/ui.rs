@@ -81,6 +81,8 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         " [updating]"
     } else if app.shutdown_task.is_some() {
         " [shutting down]"
+    } else if app.swap_task.is_some() {
+        " [swapping]"
     } else if app.loading {
         " [loading]"
     } else {
@@ -309,6 +311,7 @@ fn draw_world_detail(f: &mut Frame, app: &App, area: Rect) {
         Line::from("Future multi-Sietch work should target disposable worlds first."),
         Line::from(""),
         Line::from("[I] initializes a per-world settings profile"),
+        Line::from("[S] hot-swaps: parks the online world, activates this one"),
     ];
     f.render_widget(panel("World", lines), area);
 }
@@ -815,21 +818,28 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
     let visible = (area.height as usize).saturating_sub(2); // minus borders
     let update_output = app.update_task.is_some();
     let shutdown_output = app.shutdown_task.is_some();
+    let swap_output = app.swap_task.is_some();
     let title = if update_output {
         "Update Output (running...)"
     } else if shutdown_output {
         "Clean Shutdown Output (running...)"
+    } else if swap_output {
+        "World Swap Output (running...)"
     } else {
         "Log"
     };
-    let lines: Vec<Line> = if update_output || shutdown_output {
+    let lines: Vec<Line> = if update_output || shutdown_output || swap_output {
         let output_lines = if shutdown_output {
             &app.shutdown_lines
+        } else if swap_output {
+            &app.swap_lines
         } else {
             &app.update_lines
         };
         let starting = if shutdown_output {
             "Starting clean shutdown..."
+        } else if swap_output {
+            "Starting world swap..."
         } else {
             "Starting update..."
         };
@@ -871,11 +881,17 @@ fn draw_log(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
-    if app.update_task.is_some() || app.shutdown_task.is_some() || app.token_rotate_task.is_some() {
+    if app.update_task.is_some()
+        || app.shutdown_task.is_some()
+        || app.swap_task.is_some()
+        || app.token_rotate_task.is_some()
+    {
         let op = if app.token_rotate_task.is_some() {
             "FLS token rotation running..."
         } else if app.shutdown_task.is_some() {
             "clean shutdown running..."
+        } else if app.swap_task.is_some() {
+            "world swap running..."
         } else {
             "update running..."
         };
@@ -887,7 +903,7 @@ fn draw_hints(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
     let hint = match app.view {
-        View::Worlds => "[↑/↓] select world  [I] init profile  [r] refresh  [q] quit",
+        View::Worlds => "[↑/↓] select world  [S] swap to selected  [I] init profile  [r] refresh  [q] quit",
         View::Dashboard => {
             "[A] start world  [Z] stop world  [R] restart  [Q] clean shutdown  [u] update  [T] rotate token  [r] refresh"
         }

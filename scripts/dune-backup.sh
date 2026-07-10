@@ -165,6 +165,25 @@ case "$backup_env" in
         ;;
 esac
 
+# Refuse to back up a world whose namespace/database is gone — otherwise the run
+# creates a bundle skeleton (dir + MANIFEST) and only fails later on the missing
+# dump, leaving a hollow, restore-useless bundle. This is exactly what happened
+# 2026-07-10 when the nightly cron was still pinned to a parked (swapped-out)
+# world. Fail early, loudly, and before touching the filesystem. Only the
+# explicit --bg path can hit this; the auto-select path already picks an existing
+# namespace, but the check is harmless there.
+if ! sudo kubectl get ns "$ns" >/dev/null 2>&1; then
+    echo "ERROR: namespace $ns does not exist — nothing to back up (world '$bgname' is not deployed)." >&2
+    echo "       If it was parked/swapped out, retarget the nightly backup schedule to the live world:" >&2
+    echo "       dune-ctl --world <live-world> backup schedule --retarget" >&2
+    exit 1
+fi
+if [ "$skip_db" -eq 0 ] \
+    && ! sudo kubectl get databasedeployments -n "$ns" --no-headers 2>/dev/null | grep -q .; then
+    echo "ERROR: no DatabaseDeployment in $ns — the database is not up; refusing to write an empty backup." >&2
+    exit 1
+fi
+
 timestamp="$(date -u +%Y%m%d-%H%M%S)"
 if [ -z "$backup_name" ]; then
     backup_name="$bgname-$timestamp.backup"

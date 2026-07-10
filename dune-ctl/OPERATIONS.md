@@ -62,6 +62,14 @@ dune-ctl
 Tab `1` is the world selector. Use `↑`/`↓` there to switch capsules; the
 active world retargets immediately and tabs `2` through `7` follow that world.
 
+### Worlds view keys
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Select / retarget world |
+| `I` | Initialize a per-world settings profile for the selected world |
+| `S` | Hot-swap to the selected world (parks the online world, activates this one, retargets the backup schedule). Shows a confirmation; needs ≥2 worlds; output streams in the log pane. Equivalent to `dune-ctl worlds swap <world> --apply`. |
+
 ### Dashboard keys
 
 | Key | Action |

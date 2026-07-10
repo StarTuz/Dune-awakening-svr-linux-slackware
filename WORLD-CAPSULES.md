@@ -169,6 +169,15 @@ Implemented now:
 - `refresh`
 - `create`
 - `activate` dry-run, with `--apply` guarded against existing battlegroups
+- `park` dry-run, with `--apply` (stop → drain game pods → backup → export →
+  delete namespace); backup + export must exist before the namespace is deleted
+- `swap --to <bg>` dry-run, with `--apply` (park active world → activate target);
+  enforces the single-active invariant (refuses if the target is already online)
+
+Both `park` and `swap` are also exposed through `dune-ctl`:
+`dune-ctl capsules park`, `dune-ctl capsules swap`, and the friendly
+`dune-ctl worlds swap <world>` (resolves a title or battlegroup id). `worlds
+list` marks each world `online`/`cold` from the live cluster.
 
 Live FLS world names must use the six-letter suffix form, for example
 `sh-<hostid>-silakw`. Numeric suffixes are rejected by FLS with

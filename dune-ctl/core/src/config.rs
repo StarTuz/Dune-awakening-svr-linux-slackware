@@ -136,7 +136,17 @@ impl Config {
         let dst = self.world_user_settings_dir();
         std::fs::create_dir_all(&dst)?;
 
-        let src = self.default_user_settings_dir();
+        // Seed from the capsule's rendered UserSettings when present — those
+        // carry this world's per-world values (e.g. Bgd.ServerDisplayName) and
+        // are what activation deploys. Falling back to the bare repo default
+        // would give the profile the generic name and let a later
+        // `settings apply` clobber the deployed per-world name.
+        let capsule_settings = self.capsule_dir().join("UserSettings");
+        let src = if capsule_settings.join("UserEngine.ini").exists() {
+            capsule_settings
+        } else {
+            self.default_user_settings_dir()
+        };
         for filename in ["UserEngine.ini", "UserGame.ini"] {
             let src_file = src.join(filename);
             let dst_file = dst.join(filename);
@@ -164,11 +174,17 @@ impl WorldProfile {
 }
 
 fn is_world_spec_filename(fname: &str) -> bool {
+    // ~/.dune also collects non-world YAML: per-map secrets and the
+    // DatabaseOperation manifests that battlegroup.sh writes for dump/import
+    // runs (e.g. <bg>-dump-<ts>.yaml, <bg>-import-<ts>.yaml). Those are
+    // completed-operation records, not world specs — exclude them so they don't
+    // surface as phantom worlds in `worlds list` / the TUI.
     fname.ends_with(".yaml")
         && !fname.contains("-secret")
         && !fname.contains("-rmq")
         && !fname.contains("-fls")
         && !fname.contains("-dump-")
+        && !fname.contains("-import-")
 }
 
 fn discover_yaml_worlds() -> anyhow::Result<Vec<WorldProfile>> {

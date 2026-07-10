@@ -29,6 +29,9 @@ Commands:
   images load [options]             Import package images into k3s/containerd
   images verify [options]           Verify package images are registered in k3s/containerd
   activate [options]                Dry-run or apply a rendered capsule
+  park [options]                    Dry-run or apply a park of the active world
+  swap [options]                    Hot-swap the active Live world for another capsule
+  restore [options]                 Sudo-safe restore of a backup bundle into a stopped world
   -h, --help                        Show this help
 
 Create options:
@@ -65,6 +68,23 @@ Activate options:
   --world-id NAME                   Capsule battlegroup id
   --apply                           Apply namespace, secrets, and BattleGroup
   --force                           Allow apply while other battlegroups exist
+
+Park options:
+  --env ptc|live                    Capsule environment (default: live)
+  --world-id NAME                   Battlegroup id of the world to park
+  --apply                           Stop, back up, and delete the namespace
+  --skip-backup                     Skip the final backup (not recommended)
+
+Swap options:
+  --env ptc|live                    Capsule environment (default: live)
+  --to NAME                         Target capsule battlegroup id to activate
+  --apply                           Park the active world and activate the target
+  --skip-backup                     Skip the parked world's final backup
+  --restore                         After activating, restore the target's latest
+                                    backup (parked worlds come up empty). Guarded:
+                                    only when a backup exists and the db is empty.
+  --restore-force                   With --restore, restore even if the db is
+                                    non-empty (e.g. schema-init seed rows).
 EOF
 }
 
@@ -208,7 +228,7 @@ token_host_id() {
 
 generate_world_id() {
     local token="$1"
-    local host_id suffix
+    local host_id suffix=""
     host_id="$(token_host_id "$token")"
     [ -n "$host_id" ] || die "token does not contain HostId"
     while [ "${#suffix}" -lt 6 ]; do
@@ -723,6 +743,498 @@ activate_capsule() {
     sudo_capsule kubectl apply -n "$ns" -f "$dir/rmq-secret.yaml"
     sudo_capsule kubectl apply -n "$ns" -f "$dir/battlegroup.yaml"
     echo "Capsule applied. Watch with: sudo kubectl get battlegroups -A"
+
+    # A brand-new world comes up on a fresh Postgres volume where only the
+    # superuser exists — the game role/database are never created, and the
+    # operator's schema-init only waits for them (world hangs with
+    # "database \"dune\" does not exist"). Ensure them now; idempotent, so a
+    # swap-in of an already-initialized world is a no-op.
+    provision_database_for "$ns" "$world_id"
+
+    # A brand-new world also has no UserSettings on its shared volume, so the
+    # game servers fall back to package defaults (Port=7777/IGWPort=7888 — the
+    # Conan-colliding UE defaults, outside our forwarded 7782-7790 range). Seed
+    # the capsule's UserSettings before the servers start. Skips an already-
+    # initialized world so live settings are never clobbered.
+    deploy_user_settings_for "$ns" "$dir"
+}
+
+# Seed the capsule's UserSettings onto the world's shared volume via the
+# filebrowser pod (which mounts the same PVC the game servers read from at
+# DuneSandbox/Saved). Only seeds a fresh world — an existing UserEngine.ini is
+# left untouched so live-edited settings survive a swap-in.
+deploy_user_settings_for() {
+    local ns="$1" dir="$2"
+    section "Deploying UserSettings"
+    local src="$dir/UserSettings"
+    if [ ! -f "$src/UserEngine.ini" ]; then
+        echo "  capsule has no UserSettings; skipping"
+        return 0
+    fi
+    local fbpod="" waited=0
+    while [ "$waited" -lt 180 ]; do
+        fbpod="$(sudo_capsule kubectl get pods -n "$ns" --no-headers 2>/dev/null \
+            | awk '/-fb-deploy-/{print $1; exit}')"
+        if [ -n "$fbpod" ] \
+            && sudo_capsule kubectl wait --for=condition=Ready -n "$ns" "pod/$fbpod" --timeout=10s >/dev/null 2>&1; then
+            break
+        fi
+        fbpod=""
+        sleep 10
+        waited=$((waited + 10))
+        echo "  waiting for filebrowser pod in $ns... (${waited}s / 180s)"
+    done
+    [ -n "$fbpod" ] || die "filebrowser pod did not become ready in $ns; cannot deploy UserSettings"
+
+    if sudo_capsule kubectl exec -n "$ns" "$fbpod" -- test -f /srv/UserSettings/UserEngine.ini >/dev/null 2>&1; then
+        echo "  UserSettings already present on the volume; leaving them untouched"
+        return 0
+    fi
+
+    sudo_capsule kubectl exec -n "$ns" "$fbpod" -- mkdir -p /srv/UserSettings
+    local f
+    for f in UserEngine.ini UserGame.ini; do
+        [ -f "$src/$f" ] || continue
+        sudo_capsule kubectl cp "$src/$f" "$ns/$fbpod:/srv/UserSettings/$f" \
+            || die "failed to deploy $f to $ns"
+        echo "  deployed $f"
+    done
+    echo "UserSettings deployed; game servers read them from the shared volume on start."
+}
+
+# Restore a database dump into a STOPPED world via a Funcom import
+# DatabaseOperation, staging the dump through the filebrowser pod (which mounts
+# the game PVC at /srv, so /srv/DatabaseDumps is what the operator reads). This
+# is the sudo-whitelist-safe path (only `sudo -n kubectl`); the legacy
+# `dune-ctl backup restore` stages via `sudo cp/mkdir` to /funcom/artifacts and
+# fails under non-interactive NOPASSWD-only sudo. Caller MUST ensure the
+# battlegroup is stopped first — import is destructive.
+restore_database_for() {
+    local ns="$1" bg="$2" dump_file="$3"
+    [ -f "$dump_file" ] || die "dump file not found: $dump_file"
+    local backup_name
+    backup_name="$(basename "$dump_file")"
+
+    section "Restoring database ($backup_name)"
+    local fbpod="" waited=0
+    while [ "$waited" -lt 180 ]; do
+        fbpod="$(sudo_capsule kubectl get pods -n "$ns" --no-headers 2>/dev/null \
+            | awk '/-fb-deploy-/{print $1; exit}')"
+        if [ -n "$fbpod" ] \
+            && sudo_capsule kubectl wait --for=condition=Ready -n "$ns" "pod/$fbpod" --timeout=10s >/dev/null 2>&1; then
+            break
+        fi
+        fbpod=""
+        sleep 10
+        waited=$((waited + 10))
+        echo "  waiting for filebrowser pod in $ns... (${waited}s / 180s)"
+    done
+    [ -n "$fbpod" ] || die "filebrowser pod did not become ready in $ns; cannot stage restore"
+
+    # Stage the dump into the game PVC's DatabaseDumps dir (kubectl cp — no sudo cp).
+    sudo_capsule kubectl exec -n "$ns" "$fbpod" -- mkdir -p /srv/DatabaseDumps
+    sudo_capsule kubectl cp "$dump_file" "$ns/$fbpod:/srv/DatabaseDumps/$backup_name" \
+        || die "failed to stage dump into $ns"
+    echo "  staged $backup_name into the game volume"
+
+    # Apply an import DatabaseOperation and wait for it (mirrors dune-backup.sh's
+    # dump-side pattern, action=import).
+    local op_name="$bg-import-$(date +%Y%m%d-%H%M%S)"
+    printf '%s\n' \
+        'apiVersion: igw.funcom.com/v1' \
+        'kind: DatabaseOperation' \
+        'metadata:' \
+        "  name: $op_name" \
+        "  namespace: $ns" \
+        'spec:' \
+        "  battleGroup: $bg" \
+        '  action: import' \
+        "  backup: $backup_name" \
+        | sudo_capsule kubectl apply -f - || die "failed to apply import operation"
+    echo "  import operation $op_name applied; waiting..."
+
+    local elapsed=0 interval=5 timeout=600 phase
+    while [ "$elapsed" -lt "$timeout" ]; do
+        phase="$(sudo_capsule kubectl get databaseoperation "$op_name" -n "$ns" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
+        case "$phase" in
+            Succeeded)
+                echo "  database import succeeded."
+                return 0
+                ;;
+            Failed)
+                sudo_capsule kubectl describe databaseoperation "$op_name" -n "$ns" >&2 || true
+                die "import operation $op_name failed"
+                ;;
+        esac
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+        echo "  still waiting... (${elapsed}s / ${timeout}s, phase=${phase:-Pending})"
+    done
+    die "timed out waiting for import operation $op_name"
+}
+
+# Standalone sudo-safe restore of a backup bundle into a stopped world. Used to
+# validate B0 independently of swap; B1 (swap --restore) reuses
+# restore_database_for. Dry-run by default.
+restore_capsule() {
+    local env="live" world_id="" bundle="" apply=0
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --env) env="${2:-}"; shift 2 ;;
+            --world|--world-id|--to) world_id="${2:-}"; shift 2 ;;
+            --bundle) bundle="${2:-}"; shift 2 ;;
+            --apply) apply=1; shift ;;
+            *) die "unknown restore option: $1" ;;
+        esac
+    done
+    validate_env "$env"
+    [ -n "$world_id" ] || die "--world-id <battlegroup> is required"
+    [ -n "$bundle" ] || die "--bundle <timestamp> is required"
+
+    local ns="$BATTLEGROUP_PREFIX$world_id"
+    local bundle_dir="$BACKUP_ROOT/$env/$world_id/$bundle"
+    [ -d "$bundle_dir" ] || die "bundle not found: $bundle_dir"
+    local dump_file
+    dump_file="$(ls -1 "$bundle_dir/database/"*.backup 2>/dev/null | grep -v '\.yaml$' | head -1)"
+    [ -n "$dump_file" ] || die "no .backup dump in $bundle_dir/database/"
+
+    echo "Restore plan:"
+    echo "  env=$env"
+    echo "  world_id=$world_id"
+    echo "  namespace=$ns"
+    echo "  bundle=$bundle"
+    echo "  dump=$dump_file"
+    echo "  steps: verify stopped -> stage dump (kubectl) -> import DatabaseOperation"
+
+    if [ "$apply" -ne 1 ]; then
+        echo
+        echo "Dry run only. Re-run with --apply to perform the restore (world must be stopped)."
+        return 0
+    fi
+
+    # Import is destructive; require the battlegroup stopped.
+    local stop
+    stop="$(sudo_capsule kubectl get battlegroup "$world_id" -n "$ns" -o jsonpath='{.spec.stop}' 2>/dev/null || true)"
+    [ "$stop" = "true" ] || die "battlegroup $world_id is not stopped (spec.stop=${stop:-unknown}); run 'dune-ctl --world $world_id sietches stop' first"
+
+    restore_database_for "$ns" "$world_id" "$dump_file"
+    echo "Restore complete. Start with: dune-ctl --world $world_id sietches start"
+}
+
+# Wait for the operator to bring up the Postgres pod, then ensure the game
+# role/database exist via db-credentials.sh.
+provision_database_for() {
+    local ns="$1" world_id="$2"
+    section "Provisioning game database"
+    local dbpod="" waited=0
+    while [ "$waited" -lt 300 ]; do
+        dbpod="$(sudo_capsule kubectl get pods -n "$ns" --no-headers 2>/dev/null \
+            | awk '/-db-dbdepl-sts-/{print $1; exit}')"
+        if [ -n "$dbpod" ] \
+            && sudo_capsule kubectl wait --for=condition=Ready -n "$ns" "pod/$dbpod" --timeout=10s >/dev/null 2>&1; then
+            break
+        fi
+        dbpod=""
+        sleep 10
+        waited=$((waited + 10))
+        echo "  waiting for Postgres pod in $ns... (${waited}s / 300s)"
+    done
+    [ -n "$dbpod" ] || die "Postgres pod did not become ready in $ns; cannot provision game database"
+    "$REPO_ROOT/scripts/db-credentials.sh" provision --bg "$world_id" \
+        || die "game database provisioning failed for $world_id"
+}
+
+# Wait for all game server pods (role=igw-server) in a namespace to terminate.
+# These are the map pods owned by the ServerSet CR; waiting for them to drain
+# before backup gives a consistent DB dump (the servers have flushed state).
+wait_game_pods_gone() {
+    local ns="$1"
+    local timeout="${2:-300}"
+    local waited=0
+    while true; do
+        local count
+        count="$(sudo_capsule kubectl get pods -n "$ns" -l role=igw-server \
+            --no-headers 2>/dev/null | awk 'NF {c++} END {print c+0}')"
+        if [ "$count" -eq 0 ]; then
+            echo "  game server pods drained"
+            return 0
+        fi
+        if [ "$waited" -ge "$timeout" ]; then
+            echo "  WARNING: $count game server pod(s) still present after ${timeout}s" >&2
+            return 1
+        fi
+        echo "  waiting for $count game server pod(s) to terminate (${waited}s)..."
+        sleep 10
+        waited=$((waited + 10))
+    done
+}
+
+# Park the active world: stop the battlegroup, wait for game pods to drain,
+# take a final env+bg-stamped backup, export namespace evidence, and only then
+# delete the namespace. Capsule files and backups remain on disk. Dry-run by
+# default; pass --apply to mutate the cluster.
+park_capsule() {
+    local env="live"
+    local world_id=""
+    local apply=0
+    local skip_backup=0
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --env)
+                env="${2:-}"
+                shift 2
+                ;;
+            --world-id|--world)
+                world_id="${2:-}"
+                shift 2
+                ;;
+            --apply)
+                apply=1
+                shift
+                ;;
+            --skip-backup)
+                skip_backup=1
+                shift
+                ;;
+            *)
+                die "unknown park option: $1"
+                ;;
+        esac
+    done
+
+    validate_env "$env"
+    [ -n "$world_id" ] || die "--world-id is required"
+    local ns="$BATTLEGROUP_PREFIX$world_id"
+
+    echo "Park plan:"
+    echo "  env=$env"
+    echo "  world_id=$world_id"
+    echo "  namespace=$ns"
+    echo "  backup=$([ "$skip_backup" -eq 1 ] && echo skip || echo yes)"
+    echo "  steps: stop -> drain game pods -> backup -> export -> delete namespace"
+
+    if ! sudo_capsule kubectl get ns "$ns" >/dev/null 2>&1; then
+        echo
+        echo "Namespace $ns does not exist; nothing to park."
+        return 0
+    fi
+
+    if [ "$apply" -ne 1 ]; then
+        echo
+        echo "Dry run only. Re-run with --apply to stop, back up, and delete the namespace."
+        return 0
+    fi
+
+    section "Stopping battlegroup $world_id"
+    sudo_capsule kubectl patch battlegroup "$world_id" -n "$ns" \
+        --type=merge -p '{"spec":{"stop":true}}'
+
+    section "Draining game server pods"
+    wait_game_pods_gone "$ns" || die "game server pods did not drain; refusing to park"
+
+    if [ "$skip_backup" -ne 1 ]; then
+        section "Final backup ($env/$world_id)"
+        "$REPO_ROOT/scripts/dune-backup.sh" --env "$env" --bg "$world_id" \
+            || die "backup failed; refusing to delete namespace $ns"
+    fi
+
+    section "Exporting namespace evidence"
+    local export_dir="$CAPSULE_ROOT/$env/$world_id/exports/$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$export_dir"
+    sudo_capsule kubectl get all,pvc,secret,battlegroup,serverset,messagequeue \
+        -n "$ns" -o yaml > "$export_dir/namespace.yaml" 2>/dev/null || true
+    echo "  wrote $export_dir/namespace.yaml"
+
+    section "Deleting namespace $ns"
+    sudo_capsule kubectl delete ns "$ns" --wait=true
+    echo "Parked $world_id: namespace removed; capsule files and backups retained."
+}
+
+# Hot-swap the active Live world for another capsule. Parks whichever world is
+# currently online (backup + namespace teardown), then activates the target.
+# Enforces the single-active invariant: exactly one Live world online at a time.
+swap_capsule() {
+    local env="live"
+    local target=""
+    local apply=0
+    local skip_backup=0
+    local restore=0
+    local restore_force=0
+
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --env)
+                env="${2:-}"
+                shift 2
+                ;;
+            --to|--world|--world-id)
+                target="${2:-}"
+                shift 2
+                ;;
+            --apply)
+                apply=1
+                shift
+                ;;
+            --skip-backup)
+                skip_backup=1
+                shift
+                ;;
+            --restore)
+                restore=1
+                shift
+                ;;
+            --restore-force)
+                # Override the empty-db guard (e.g. when schema-init seeds rows).
+                # Still refuses to run without --restore.
+                restore=1
+                restore_force=1
+                shift
+                ;;
+            *)
+                die "unknown swap option: $1"
+                ;;
+        esac
+    done
+
+    validate_env "$env"
+    [ -n "$target" ] || die "--to <battlegroup> is required"
+
+    # Validate the target capsule exists before touching the live world.
+    local target_dir
+    target_dir="$(resolve_capsule_dir "$env" "$target")"
+
+    local active_list active_count
+    active_list="$(active_battlegroups || true)"
+    active_count="$(printf '%s\n' "$active_list" | awk 'NF {count++} END {print count+0}')"
+
+    # Refuse if the target is already the active world.
+    if printf '%s\n' "$active_list" | grep -qx "$target"; then
+        die "target $target is already active; nothing to swap"
+    fi
+
+    # Resolve the target's latest backup bundle up front so both the dry-run and
+    # the apply path agree on exactly what would be restored.
+    local restore_bundle="" restore_dump=""
+    if [ "$restore" -eq 1 ]; then
+        restore_bundle="$(ls -1d "$BACKUP_ROOT/$env/$target/"*/ 2>/dev/null \
+            | sed 's:/*$::' | awk -F/ '{print $NF}' | sort -r | head -1)"
+        if [ -n "$restore_bundle" ]; then
+            restore_dump="$(ls -1 "$BACKUP_ROOT/$env/$target/$restore_bundle/database/"*.backup 2>/dev/null \
+                | grep -v '\.yaml$' | head -1)"
+        fi
+    fi
+
+    echo "Swap plan:"
+    echo "  env=$env"
+    echo "  target=$target ($target_dir)"
+    if [ "$active_count" -gt 0 ]; then
+        echo "  park_active=$(printf '%s' "$active_list" | tr '\n' ' ')"
+    else
+        echo "  park_active=none (no world currently online)"
+    fi
+    if [ "$restore" -eq 1 ]; then
+        if [ -n "$restore_dump" ]; then
+            echo "  restore=yes bundle=$restore_bundle dump=$(basename "$restore_dump")"
+            echo "          (guard: only into an empty dune schema$([ "$restore_force" -eq 1 ] && echo '; --restore-force overrides'))"
+        elif [ -n "$restore_bundle" ]; then
+            echo "  restore=yes bundle=$restore_bundle but NO .backup dump found -> would ABORT"
+        else
+            echo "  restore=yes but target has no backup bundle -> skip (treated as fresh world)"
+        fi
+    else
+        echo "  restore=no (activate leaves an empty db; use --restore to auto-restore latest backup)"
+    fi
+    echo "  steps: park active world(s) -> activate target$([ "$restore" -eq 1 ] && echo ' -> stop -> restore latest') -> FLS re-declare -> preflight"
+
+    if [ "$apply" -ne 1 ]; then
+        echo
+        echo "Dry run only. Re-run with --apply to perform the swap."
+        return 0
+    fi
+
+    # Park every currently-active world so the target activates into a clean host.
+    local bg
+    while IFS= read -r bg; do
+        [ -n "$bg" ] || continue
+        section "Parking active world $bg"
+        local park_args=(--env "$env" --world-id "$bg" --apply)
+        [ "$skip_backup" -eq 1 ] && park_args+=(--skip-backup)
+        park_capsule "${park_args[@]}"
+    done <<EOF
+$active_list
+EOF
+
+    section "Activating target $target"
+    activate_capsule --env "$env" --world-id "$target" --apply
+
+    # Re-point the nightly backup schedule at the newly active world *immediately*
+    # after activate — before the (optional, can-abort) auto-restore below. The
+    # parked world's namespace is gone, so leaving the cron on it silently breaks
+    # backups; if we deferred this past the restore step and the restore die()d
+    # (e.g. the empty-db guard), the cron would stay pinned to the parked world
+    # (this happened 2026-07-10). Best-effort: a swap that already activated the
+    # target must not be failed by a crontab hiccup. No-op if no schedule exists.
+    section "Retargeting backup schedule"
+    local dune_ctl="$REPO_ROOT/dune-ctl/target/release/dune-ctl"
+    if [ -x "$dune_ctl" ]; then
+        "$dune_ctl" --world "$target" backup schedule --retarget \
+            || echo "WARNING: backup schedule retarget failed; run 'dune-ctl --world $target backup schedule --retarget' manually" >&2
+    else
+        echo "WARNING: dune-ctl binary not found at $dune_ctl; retarget the nightly backup schedule to $target manually" >&2
+    fi
+
+    # Auto-restore (B1): a parked world's data lives only in its backups, so a
+    # bare swap-in yields an empty world. When --restore is set, restore the
+    # target's latest bundle into the freshly-activated (empty) db. Guarded:
+    # only when a backup exists AND the dune schema is empty (never clobber).
+    if [ "$restore" -eq 1 ]; then
+        local rt_ns="$BATTLEGROUP_PREFIX$target"
+        if [ -z "$restore_bundle" ]; then
+            section "Auto-restore skipped"
+            echo "  $target has no backup bundle under $BACKUP_ROOT/$env/$target/; leaving empty db (fresh world)."
+        else
+            [ -n "$restore_dump" ] || die "bundle $restore_bundle has no .backup dump; refusing to continue (world is up but empty). Restore manually."
+            section "Auto-restore: empty-db guard"
+            local rows
+            rows="$("$REPO_ROOT/scripts/db-credentials.sh" data-check --bg "$target" 2>/dev/null || echo unknown)"
+            echo "  player-owned rows (schema-init seed excluded): $rows"
+            if [ "$rows" = "unknown" ]; then
+                die "could not determine whether $target has player data; refusing auto-restore. Inspect, then restore manually or re-run with --restore-force."
+            fi
+            if [ "$rows" != "0" ] && [ "$restore_force" -ne 1 ]; then
+                die "$target already has player data (~$rows player-owned rows) — refusing to clobber. Re-run with --restore-force only if you are sure this world should be overwritten."
+            fi
+
+            section "Auto-restore: stopping $target before import"
+            sudo_capsule kubectl patch battlegroup "$target" -n "$rt_ns" \
+                --type=merge -p '{"spec":{"stop":true}}'
+            wait_game_pods_gone "$rt_ns" || die "game pods for $target did not drain; refusing destructive import. Restore manually once stopped."
+
+            restore_database_for "$rt_ns" "$target" "$restore_dump"
+            section "Auto-restore complete"
+            echo "  restored $restore_bundle into $target; the world is left STOPPED."
+            echo "  start it with: dune-ctl --world $target sietches start"
+        fi
+    fi
+
+    section "Swap complete"
+    if [ "$restore" -eq 1 ] && [ -n "$restore_bundle" ]; then
+        cat <<EOF
+Target $target activated and restored from $restore_bundle (left STOPPED). Next:
+  - Start it:  dune-ctl --world $target sietches start
+  - Wait ~5-10 min for FLS re-declaration before the world is browser-visible.
+  - Verify: dune-ctl --world $target preflight
+            dune-ctl --world $target status
+EOF
+    else
+        cat <<EOF
+Target $target activated. Next:
+  - Wait ~5-10 min for FLS re-declaration before the world is browser-visible.
+  - Verify: dune-ctl --world $target preflight
+            dune-ctl --world $target status
+EOF
+    fi
 }
 
 copy_user_settings() {
@@ -879,7 +1391,13 @@ create_capsule() {
         steam_build=""
         steam_name=""
     fi
-    if [ "$env" = "live" ] && [ -f "$package_root/steamapps/appmanifest_$DEFAULT_PTC_APP_ID.acf" ]; then
+    # Refuse only a genuinely PTC-only root: a PTC manifest with no live manifest
+    # alongside it. A valid live root may also carry a stray PTC manifest (steamapps
+    # accumulates appmanifests) — Ixware's own live root does — so the live manifest
+    # being present is the authoritative signal that live content is installed here.
+    if [ "$env" = "live" ] \
+        && [ -f "$package_root/steamapps/appmanifest_$DEFAULT_PTC_APP_ID.acf" ] \
+        && [ ! -f "$package_root/steamapps/appmanifest_$DEFAULT_LIVE_APP_ID.acf" ]; then
         die "refusing to create live capsule from PTC package root: $package_root"
     fi
 
@@ -1098,6 +1616,18 @@ case "${1:-}" in
     activate)
         shift
         activate_capsule "$@"
+        ;;
+    park)
+        shift
+        park_capsule "$@"
+        ;;
+    swap)
+        shift
+        swap_capsule "$@"
+        ;;
+    restore)
+        shift
+        restore_capsule "$@"
         ;;
     -h|--help|"")
         usage

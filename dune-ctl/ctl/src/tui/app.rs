@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use dune_ctl_core::{
-    backup,
+    backup, capsules,
     config::{Config, WorldProfile},
     fls,
     health::HealthSnapshot,
@@ -47,6 +47,9 @@ pub struct App {
     pub shutdown_task: Option<JoinHandle<Result<()>>>,
     pub shutdown_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
     pub shutdown_lines: Vec<String>,
+    pub swap_task: Option<JoinHandle<Result<()>>>,
+    pub swap_rx: Option<tokio::sync::mpsc::UnboundedReceiver<String>>,
+    pub swap_lines: Vec<String>,
     pub token_rotate_task: Option<JoinHandle<Result<fls::TokenRotationReport>>>,
     pub pending_token: Option<String>,
     pub view: View,
@@ -85,6 +88,7 @@ pub enum PendingAction {
     RotateFlsToken,
     DeleteBackup,
     RemoveSchedule,
+    SwapWorld,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,6 +125,7 @@ impl PendingAction {
             Self::RotateFlsToken => "rotate FLS token",
             Self::DeleteBackup => "delete backup bundle",
             Self::RemoveSchedule => "remove backup schedule",
+            Self::SwapWorld => "hot-swap to the selected world",
         }
     }
 
@@ -168,6 +173,9 @@ impl PendingAction {
             Self::RemoveSchedule => {
                 "Removes the nightly backup cron job. Existing backup data is not deleted."
             }
+            Self::SwapWorld => {
+                "Hot-swaps the active Live world for the selected one. Parks whatever is online (stop BattleGroup, drain game pods, final backup, export, then DELETE its namespace), then activates the selected world and re-points the nightly backup schedule at it. Only one world is online at a time; the parked world is recoverable from its backup by swapping back. Refuses if the selected world is already online. Takes several minutes; output streams below."
+            }
         }
     }
 }
@@ -205,6 +213,9 @@ impl App {
             shutdown_task: None,
             shutdown_rx: None,
             shutdown_lines: Vec::new(),
+            swap_task: None,
+            swap_rx: None,
+            swap_lines: Vec::new(),
             token_rotate_task: None,
             pending_token: None,
             view: View::Dashboard,
@@ -224,6 +235,7 @@ impl App {
     pub fn retarget_world(&mut self, index: usize) -> bool {
         if self.update_task.is_some()
             || self.shutdown_task.is_some()
+            || self.swap_task.is_some()
             || self.token_rotate_task.is_some()
         {
             self.push_log("operation running; world retarget disabled");
@@ -255,6 +267,9 @@ impl App {
         self.shutdown_task = None;
         self.shutdown_rx = None;
         self.shutdown_lines.clear();
+        self.swap_task = None;
+        self.swap_rx = None;
+        self.swap_lines.clear();
         self.token_rotate_task = None;
         self.pending_token = None;
         self.loading = true;
@@ -328,6 +343,7 @@ pub async fn run_loop<B: Backend>(terminal: &mut Terminal<B>, cfg: &Config) -> R
         finish_backup_task(&mut app).await;
         finish_update_task(&mut app).await;
         finish_shutdown_task(&mut app).await;
+        finish_swap_task(&mut app).await;
         finish_token_rotate_task(&mut app).await;
         terminal.draw(|f| ui::draw(f, &app))?;
 
@@ -540,6 +556,33 @@ pub fn start_clean_shutdown(app: &mut App) {
     app.push_log("shutdown will back up, stop BattleGroup, and wait for game servers");
 }
 
+pub fn start_swap_run(app: &mut App) {
+    if app.swap_task.is_some() {
+        app.push_log("world swap already running");
+        return;
+    }
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    app.swap_rx = Some(rx);
+    app.swap_lines.clear();
+    let cfg = app.cfg.clone();
+    // The Worlds tab retargets app.cfg to the highlighted world, so the swap
+    // target is the current cfg. The shell independently finds and parks
+    // whatever is online, and refuses if the target is already active.
+    let args = vec![
+        String::from("swap"),
+        String::from("--env"),
+        cfg.backup_environment.clone(),
+        String::from("--to"),
+        cfg.battlegroup.clone(),
+        String::from("--apply"),
+    ];
+    app.swap_task = Some(tokio::spawn(async move {
+        capsules::run_stream_tx(&cfg, &args, tx).await
+    }));
+    app.push_log("world swap started");
+    app.push_log("swap parks the active world and activates the selected one");
+}
+
 pub fn start_token_rotation(app: &mut App) -> Result<()> {
     if app.token_rotate_task.is_some() {
         app.push_log("token rotation already running");
@@ -668,6 +711,43 @@ async fn finish_shutdown_task(app: &mut App) {
         }
         Ok(Err(e)) => app.push_log(format!("clean shutdown error: {:#}", e)),
         Err(e) => app.push_log(format!("clean shutdown task error: {}", e)),
+    }
+}
+
+async fn finish_swap_task(app: &mut App) {
+    if let Some(rx) = app.swap_rx.as_mut() {
+        while let Ok(line) = rx.try_recv() {
+            app.swap_lines.push(line);
+        }
+    }
+    if !app
+        .swap_task
+        .as_ref()
+        .map(|t| t.is_finished())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    if let Some(rx) = app.swap_rx.as_mut() {
+        while let Ok(line) = rx.try_recv() {
+            app.swap_lines.push(line);
+        }
+    }
+    let Some(task) = app.swap_task.take() else {
+        return;
+    };
+    app.swap_rx = None;
+    match task.await {
+        Ok(Ok(())) => {
+            app.push_log("world swap complete");
+            app.push_log("follow-up: wait ~5-10 min for FLS re-declaration, then verify preflight");
+            app.worlds = Config::discover_worlds().unwrap_or_default();
+            // The swap re-points the nightly backup schedule; reflect it.
+            app.backup_schedule = backup::read_schedule();
+            start_refresh(app);
+        }
+        Ok(Err(e)) => app.push_log(format!("world swap error: {:#}", e)),
+        Err(e) => app.push_log(format!("world swap task error: {}", e)),
     }
 }
 
@@ -863,6 +943,15 @@ async fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         }
         KeyCode::Char('I') => {
             app.pending = Some(PendingAction::InitWorldSettings);
+        }
+        KeyCode::Char('S') if app.view == View::Worlds => {
+            if app.swap_task.is_some() {
+                app.push_log("world swap already running");
+            } else if app.worlds.len() < 2 {
+                app.push_log("swap needs a second world; create one first");
+            } else {
+                app.pending = Some(PendingAction::SwapWorld);
+            }
         }
         KeyCode::Down | KeyCode::Char('j') => match app.view {
             View::Worlds if !app.worlds.is_empty() => {
@@ -1274,6 +1363,10 @@ async fn execute_pending(app: &mut App) {
             Ok(())
         }
         PendingAction::RotateFlsToken => start_token_rotation(app),
+        PendingAction::SwapWorld => {
+            start_swap_run(app);
+            Ok(())
+        }
         PendingAction::DeleteBackup => {
             if let Some(entry) = app.backup_entries.get(app.backup_selected) {
                 let path = entry.path.clone();
@@ -1306,6 +1399,7 @@ async fn execute_pending(app: &mut App) {
                 PendingAction::RunUpdate
                     | PendingAction::CleanShutdown
                     | PendingAction::RotateFlsToken
+                    | PendingAction::SwapWorld
             ) {
                 return;
             }

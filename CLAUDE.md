@@ -15,11 +15,13 @@ Doc index:
 - `BACKUP-RESTORE.md` — backup/restore runbook
 - `OFFSITE-BACKUP.md` — off-server replication (two restic repos: Backblaze B2 + Google Drive)
 - `WORLD-CAPSULES.md` — PTC/Live cold-swap world isolation model
+- `MULTI-WORLD.md` — hot-swap multiple Live worlds (design; for separate-character worlds)
+- `SWAP-RESTORE-DESIGN.md` — design for seamless swap-back (auto-restore on swap-in; "B")
 - `PUBLIC-IP.md` — public-IP rotation runbook
 - `INSTALLER-DESIGN.md` — future cross-distro installer direction
 - `dune-ctl/OPERATIONS.md` — full `dune-ctl` CLI/TUI reference
 
-**Current state**: Fully running on 64 GB RAM (motherboard upgrade applied 2026-05-17, ~58.9 GB usable). Security hardening applied 2026-05-14; Hagga Basin travel fixed 2026-05-15. The **Live** world `Ixware` (`sh-db3533a2d5a25fb-silakw`, namespace `funcom-seabass-sh-db3533a2d5a25fb-silakw`) is the active capsule; the PTC capsule `Slackware-Arrakis` (`sh-db3533a2d5a25fb-xyyxbx`) is configured but cold. Survival_1, Overmap, DeepDesert_1, SH_Arrakeen, and SH_HarkoVillage run continuously via director persistence (`MinServers=1` for DD/social hubs). Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB headroom (zram + dune-vg SSD + sdc1). VPA recommender live (Off mode, memory only). FLS token expires 2027-06-22 — rotate by 2027-05-23.
+**Current state**: Fully running on 64 GB RAM (motherboard upgrade applied 2026-05-17, ~58.9 GB usable). Security hardening applied 2026-05-14; Hagga Basin travel fixed 2026-05-15. The **Live** world `SlackSalusa` (`sh-db3533a2d5a25fb-xfrcer`, namespace `funcom-seabass-sh-db3533a2d5a25fb-xfrcer`) is the active capsule (swapped in 2026-07-10 via `swap --restore`); the first Live world `Ixware` (`sh-db3533a2d5a25fb-silakw`) is now a parked cold capsule (separate-character world — see `MULTI-WORLD.md`); the PTC capsule `Slackware-Arrakis` (`sh-db3533a2d5a25fb-xyyxbx`) is configured but cold. Only one world is online at a time (hot-swap); swapping back into a parked world restores its data automatically with `dune-ctl worlds swap <world> --restore --apply` (auto-restore B0/B1 proven 2026-07-10 — `SWAP-RESTORE-DESIGN.md`). Survival_1, Overmap, DeepDesert_1, SH_Arrakeen, and SH_HarkoVillage run continuously via director persistence (`MinServers=1` for DD/social hubs). Conan Exiles Enhanced co-tenant uses ~9.5 GB RSS. Total swap: 62 GB headroom (zram + dune-vg SSD + sdc1). VPA recommender live (Off mode, memory only). FLS token expires 2027-06-22 — rotate by 2027-05-23.
 
 ---
 
@@ -78,8 +80,9 @@ Funcom ships everything as offline OCI image tarballs — no internet required a
 
 Each battlegroup gets its own namespace `funcom-seabass-<name>`. Inside: postgres, rabbitmq, gateway, director, text-router, filebrowser, and the game server pods.
 
-**Active battlegroup (Live capsule)**: `sh-db3533a2d5a25fb-silakw` ("Ixware", region North America)
-**Namespace**: `funcom-seabass-sh-db3533a2d5a25fb-silakw`
+**Active battlegroup (Live capsule)**: `sh-db3533a2d5a25fb-xfrcer` ("SlackSalusa", region North America)
+**Namespace**: `funcom-seabass-sh-db3533a2d5a25fb-xfrcer`
+**Parked Live capsule (inactive)**: `sh-db3533a2d5a25fb-silakw` ("Ixware") — swap back with `--restore`
 **Configured PTC capsule (inactive)**: `sh-db3533a2d5a25fb-xyyxbx` ("Slackware-Arrakis")
 
 PTC and Live are kept as **cold-swappable world capsules** — only one is active
@@ -395,8 +398,10 @@ The Windows wizard writes the external IP to `/home/dune/.dune/settings.conf` be
 | Server files / `DOWNLOAD_PATH` | `~/dune-server/server/` (symlink: `~/.dune/download`) |
 | Battlegroup CLI (Funcom) | `~/dune-server/server/scripts/battlegroup.sh` (also `~/.dune/bin/battlegroup`) |
 | dune-ctl (release binary) | `~/dune-server/dune-ctl/target/release/dune-ctl` |
-| World config (Live, active) | `~/.dune/capsules/live/sh-db3533a2d5a25fb-silakw/capsule.env` (+ `battlegroup.yaml`) |
-| FLS / RMQ secrets (Live) | `~/.dune/sh-db3533a2d5a25fb-silakw-{fls,rmq}-secret.yaml` |
+| World config (Live, active) | `~/.dune/capsules/live/sh-db3533a2d5a25fb-xfrcer/capsule.env` (+ `battlegroup.yaml`) |
+| FLS / RMQ secrets (Live, active) | `~/.dune/sh-db3533a2d5a25fb-xfrcer-{fls,rmq}-secret.yaml` |
+| World config (Live, parked) | `~/.dune/capsules/live/sh-db3533a2d5a25fb-silakw/capsule.env` (Ixware) |
+| FLS / RMQ secrets (Live, parked) | `~/.dune/sh-db3533a2d5a25fb-silakw-{fls,rmq}-secret.yaml` |
 | World config YAML (PTC, cold) | `~/.dune/sh-db3533a2d5a25fb-xyyxbx.yaml` |
 | FLS / RMQ secrets (PTC) | `~/.dune/sh-db3533a2d5a25fb-xyyxbx-{fls,rmq}-secret.yaml` |
 | Per-world UserSettings | `~/.dune/worlds/<bg>/UserSettings/User{Engine,Game}.ini` |
@@ -469,11 +474,12 @@ sudo kubectl get vpa -n funcom-seabass-sh-db3533a2d5a25fb-silakw
 Before rebooting the host, cleanly stop Dune through `dune-ctl`:
 
 ```sh
-~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware shutdown --yes
+~/dune-server/dune-ctl/target/release/dune-ctl --world SlackSalusa shutdown --yes
 ```
 
-This creates a full backup, patches the selected BattleGroup to stopped, and
-waits for game servers to stop. It does not reboot the host.
+(Target whichever world is currently live — SlackSalusa as of 2026-07-10.) This
+creates a full backup, patches the selected BattleGroup to stopped, and waits for
+game servers to stop. It does not reboot the host.
 
 ## Boot Sequence (after reboot)
 
@@ -490,19 +496,22 @@ sudo rc-service k3s start
 After k3s is up, start the world and verify readiness:
 
 ```sh
-~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware battlegroup start
-~/dune-server/dune-ctl/target/release/dune-ctl --world Ixware preflight
+~/dune-server/dune-ctl/target/release/dune-ctl --world SlackSalusa battlegroup start
+~/dune-server/dune-ctl/target/release/dune-ctl --world SlackSalusa preflight
 ```
 
-(No gateway patch step — the gateway advertised IP is operator-managed from the
-k3s `node-external-ip`; `preflight`'s "gateway IP" row confirms it.)
+(Target the currently-live world — SlackSalusa as of 2026-07-10. No gateway patch
+step — the gateway advertised IP is operator-managed from the k3s
+`node-external-ip`; `preflight`'s "gateway IP" row confirms it.)
 
-Ixware's normal baseline keeps `DeepDesert_1`, `SH_Arrakeen`, and
-`SH_HarkoVillage` director-persistent (`MinServers=1`) and running. Deep Desert
-stays warm for Tier 5/6 spice/flour resource UX; social hubs stay warm for
-trainer dialogue/travel gates. If one is down after maintenance, use
-`dune-ctl --world Ixware maps prewarm <Map> --yes` to bring it up through the
-director/scaler path.
+Map persistence is per-world. Ixware's baseline kept `DeepDesert_1`,
+`SH_Arrakeen`, and `SH_HarkoVillage` director-persistent (`MinServers=1`) and
+running (Deep Desert warm for Tier 5/6 spice/flour resource UX; social hubs warm
+for trainer dialogue/travel gates). SlackSalusa's persisted-map baseline is set
+independently — check with `dune-ctl --world SlackSalusa maps list`. If a
+baseline map is down after maintenance, use
+`dune-ctl --world <live-world> maps prewarm <Map> --yes` to bring it up through
+the director/scaler path.
 
 ---
 
