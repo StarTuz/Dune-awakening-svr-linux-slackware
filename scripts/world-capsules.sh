@@ -1168,6 +1168,22 @@ EOF
     section "Activating target $target"
     activate_capsule --env "$env" --world-id "$target" --apply
 
+    # Re-point the nightly backup schedule at the newly active world *immediately*
+    # after activate — before the (optional, can-abort) auto-restore below. The
+    # parked world's namespace is gone, so leaving the cron on it silently breaks
+    # backups; if we deferred this past the restore step and the restore die()d
+    # (e.g. the empty-db guard), the cron would stay pinned to the parked world
+    # (this happened 2026-07-10). Best-effort: a swap that already activated the
+    # target must not be failed by a crontab hiccup. No-op if no schedule exists.
+    section "Retargeting backup schedule"
+    local dune_ctl="$REPO_ROOT/dune-ctl/target/release/dune-ctl"
+    if [ -x "$dune_ctl" ]; then
+        "$dune_ctl" --world "$target" backup schedule --retarget \
+            || echo "WARNING: backup schedule retarget failed; run 'dune-ctl --world $target backup schedule --retarget' manually" >&2
+    else
+        echo "WARNING: dune-ctl binary not found at $dune_ctl; retarget the nightly backup schedule to $target manually" >&2
+    fi
+
     # Auto-restore (B1): a parked world's data lives only in its backups, so a
     # bare swap-in yields an empty world. When --restore is set, restore the
     # target's latest bundle into the freshly-activated (empty) db. Guarded:
@@ -1200,19 +1216,6 @@ EOF
             echo "  restored $restore_bundle into $target; the world is left STOPPED."
             echo "  start it with: dune-ctl --world $target sietches start"
         fi
-    fi
-
-    # Re-point the nightly backup schedule at the newly active world. The parked
-    # world's namespace is gone, so leaving the cron on it would silently break
-    # backups. Best-effort: a swap that already activated the target must not be
-    # failed by a crontab hiccup. No-op if no schedule is installed.
-    section "Retargeting backup schedule"
-    local dune_ctl="$REPO_ROOT/dune-ctl/target/release/dune-ctl"
-    if [ -x "$dune_ctl" ]; then
-        "$dune_ctl" --world "$target" backup schedule --retarget \
-            || echo "WARNING: backup schedule retarget failed; run 'dune-ctl --world $target backup schedule --retarget' manually" >&2
-    else
-        echo "WARNING: dune-ctl binary not found at $dune_ctl; retarget the nightly backup schedule to $target manually" >&2
     fi
 
     section "Swap complete"
